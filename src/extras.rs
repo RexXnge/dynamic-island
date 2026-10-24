@@ -85,15 +85,26 @@ pub fn parse_link(s: &str) -> Option<(String, String)> {
     Some((s.to_string(), host.strip_prefix("www.").unwrap_or(host).to_string()))
 }
 
-/// Fetches https://host/favicon.ico on a short-lived thread. Only the scheme and host of the copied
-/// link are contacted, never its path or query.
+/// The host to ask for a favicon: https links to public domain names only, so copying a link never
+/// sends a plain-http request or one to localhost, a LAN device or a raw IP address.
+/// shortcut: a public name that resolves to a LAN address still gets fetched; resolve and check the IP if that matters.
+fn favicon_host(url: &str) -> Option<String> {
+    let rest = url.get(..8).filter(|p| p.eq_ignore_ascii_case("https://")).map(|_| &url[8..])?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority.rsplit('@').next()?.split(':').next()?.to_ascii_lowercase(); // no user:pass@ or :port
+    let tld = host.rsplit_once('.')?.1;
+    let local = ["local", "lan", "home", "internal", "localhost", "arpa", "test", "invalid"].contains(&tld);
+    (tld.len() >= 2 && tld.bytes().all(|b| b.is_ascii_alphabetic()) && !local).then_some(host)
+}
+
+/// Fetches https://host/favicon.ico on a short-lived thread. Only the host of the copied link is
+/// contacted, never its path or query.
 pub fn fetch_favicon(hwnd: HWND, url: &str, generation: u64) {
-    let Some(origin) = url.find("://").and_then(|i| url[i + 3..].find(['/', '?', '#']).map(|j| &url[..i + 3 + j]).or(Some(url))) else { return };
-    let origin = origin.to_string();
+    let Some(host) = favicon_host(url) else { return };
     let hwnd = hwnd.0 as isize;
     std::thread::spawn(move || unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        if let Ok(px) = favicon(&format!("{origin}/favicon.ico")) {
+        if let Ok(px) = favicon(&format!("https://{host}/favicon.ico")) {
             let msg = Box::into_raw(Box::new((generation, px)));
             if PostMessageW(HWND(hwnd as _), WM_FAVICON, WPARAM(0), LPARAM(msg as isize)).is_err() {
                 drop(Box::from_raw(msg));
@@ -312,5 +323,9 @@ mod tests {
         assert!(parse_link("ftp://x.com").is_none());
         assert!(parse_link("javascript:alert(1)").is_none());
         assert!(parse_link("https://evil.example\\@bank.com/login").is_none());
+        assert_eq!(favicon_host("HTTPS://user:pw@GitHub.com:8443/a").as_deref(), Some("github.com"));
+        for url in ["http://github.com", "https://localhost:3000", "https://192.168.1.1/x", "https://127.1", "https://router", "https://nas.local", "https://[::1]/"] {
+            assert!(favicon_host(url).is_none(), "{url}");
+        }
     }
 }

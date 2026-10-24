@@ -23,7 +23,7 @@ An Apple-style Dynamic Island for Windows, written in Rust with Direct2D and Dir
 
 - Now playing with album art, waveform, seek bar and synced lyrics (LRCLIB, opt-in: sends the track name to lrclib.net)
 - Control Center: scroll down on the island for Wi-Fi, Bluetooth, mic, sound, brightness, volume and dark mode
-- Timer, clipboard notices and history, downloads, Focus, Bluetooth headphones, USB plug/unplug
+- Timer, clipboard notices and history, downloads, a moon while Windows Focus is on, Bluetooth headphones, USB plug/unplug
 - Volume and brightness pill, mic-in-use dot
 - File shelf (drag files in, drag them out later)
 - Calculator and unit converter
@@ -39,7 +39,7 @@ The exe isn't code-signed, so Windows SmartScreen may warn on first run: click "
 - **No account, no telemetry:** nothing to sign up for, and it doesn't collect or send usage data.
 - **Works offline:** everything runs on your PC. The only network requests are:
   - an update check against GitHub releases (30 s after launch, then every 6 hours)
-  - the site's icon when you copy a link (just `https://<host>/favicon.ico`; turn off the Link pill to stop it)
+  - the site's icon when you copy an https link to a public site (just `https://<host>/favicon.ico`; never local or plain-http addresses; turn off the Link pill to stop it)
   - synced lyrics from lrclib.net, off by default
 - **Native and small:** Rust with Direct2D, no Electron or browser engine, under 1 MB.
 
