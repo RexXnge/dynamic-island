@@ -60,6 +60,9 @@ features = [
     "Win32_UI_WindowsAndMessaging",
 ]
 
+[build-dependencies]
+embed-resource = "2.5"
+
 [profile.release]
 opt-level = 3
 lto = true

@@ -22,6 +22,7 @@ LicenseFile=..\LICENSE
 OutputDir=..\dist
 OutputBaseFilename=DynamicIsland-Setup
 UninstallDisplayIcon={app}\{#AppExe}
+SetupIconFile=..\assets\icon.ico
 UninstallDisplayName={#AppName}
 Compression=lzma2/ultra64
 SolidCompression=yes
