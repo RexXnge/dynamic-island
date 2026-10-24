@@ -267,10 +267,7 @@ impl App {
             }
         };
 
-        // Toggle tile.
-        let tw = (l.w - PAD * 3.0) / 2.0;
-        br.SetColor(&surface(a));
-        dc.FillRoundedRectangle(&rrect(l.x + PAD, l.y + PAD - dy, tw, TILE_H, 22.0), br);
+        // Toggles sit straight on the island; no lighter tile behind them.
         for (i, &(cx, cy)) in toggles.iter().enumerate() {
             let cy = cy - dy;
             let on = clamp01(self.cc.on[i].x);
@@ -293,8 +290,9 @@ impl App {
             let al = if off_limits { a * 0.35 } else { a };
             let held = 3.0 * self.cc.grip[i].x; // swells while held
             let full = rrect(r.left - held, r.top - held, w + 2.0 * held, h + 2.0 * held, 20.0 + held);
-            br.SetColor(&surface(al));
-            dc.FillRoundedRectangle(&full, br);
+            // Dark like the island, with a faint outline so the empty part still reads as a track.
+            br.SetColor(&fg(al * 0.16));
+            dc.DrawRoundedRectangle(&full, br, 1.5, None);
             let v = clamp01(self.cc.lv[i].x);
             dc.PushAxisAlignedClip(&rect(r.left - 2.0, r.bottom - h * v, w + 4.0, h * v + 2.0), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
             br.SetColor(&fg(al * 0.92));
@@ -320,10 +318,8 @@ impl App {
         let mm = DWRITE_MEASURING_MODE_NATURAL;
         let r = sh(tile);
         // No press scale or spin: only the disc fades, like the toggles.
-        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        let w = r.right - r.left;
         let cy = (r.top + r.bottom) / 2.0;
-        br.SetColor(&surface(a));
-        dc.FillRoundedRectangle(&rrect(r.left, r.top, w, h, 16.0), br);
         let on = clamp01(self.cc.on[4].x);
         let dx = r.left + 26.0;
         disc(dx, cy, 15.0, on, a, &|ia| self.dark_icon(dx, cy, 1.0, ia));
