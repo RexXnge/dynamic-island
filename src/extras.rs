@@ -73,7 +73,8 @@ pub fn parse_link(s: &str) -> Option<(String, String)> {
     let s = s.trim();
     let lower = s.to_ascii_lowercase();
     let rest = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://"))?;
-    if s.chars().any(char::is_whitespace) {
+    // Browsers read `\` as `/`, so `https://evil\@bank.com` would be labelled bank.com but open evil.
+    if s.chars().any(|c| c.is_whitespace() || c == '\\') {
         return None;
     }
     let authority = rest.split(['/', '?', '#']).next()?;
@@ -310,5 +311,6 @@ mod tests {
         assert!(parse_link("see https://x.com").is_none());
         assert!(parse_link("ftp://x.com").is_none());
         assert!(parse_link("javascript:alert(1)").is_none());
+        assert!(parse_link("https://evil.example\\@bank.com/login").is_none());
     }
 }
