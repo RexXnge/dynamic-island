@@ -16,7 +16,9 @@ An Apple-style Dynamic Island for Windows, written in Rust with Direct2D and Dir
 cargo build --release
 ```
 
-Run `target/release/dynamic-island.exe`. Settings live in `%APPDATA%\DynamicIsland\settings.ini`.
+Run `target/release/dynamic-island.exe`.
+
+Installer: after the build above, `cargo build --release` in `installer/` makes `dynamic-island-setup.exe`, a per-user installer (no admin) with a Start menu shortcut and an uninstaller in Settings > Apps. Settings live in `%APPDATA%\DynamicIsland\settings.ini`.
 
 ## License
 
