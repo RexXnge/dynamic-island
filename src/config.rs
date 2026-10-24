@@ -55,6 +55,7 @@ pub struct Config {
     pub apps: Vec<(String, bool)>, // media apps seen so far, and whether "Choose" allows them
     pub hide_fs: bool,             // hide while a fullscreen app covers the island's display
     pub mic_dot: bool,             // dot while another app records from a microphone
+    pub welcomed: bool,            // the first-run welcome has been seen
     pub theme: usize,              // index into THEMES
     pub custom: [[f32; 2]; 3],     // Custom theme: (hue, lightness) for island, text, accent
 }
@@ -74,6 +75,7 @@ impl Default for Config {
             apps: Vec::new(),
             hide_fs: true,
             mic_dot: true,
+            welcomed: false,
             theme: 0,
             custom: [[0.62, 0.1], [0.62, 0.95], [0.55, 0.6]],
         }
@@ -122,6 +124,7 @@ impl Config {
                 "bounce" => c.bounce = f(0.0, 1.0).unwrap_or(c.bounce),
                 "hide_fs" => c.hide_fs = v == "1",
                 "mic_dot" => c.mic_dot = v == "1",
+                "welcomed" => c.welcomed = v == "1",
                 "theme" => c.theme = v.parse::<usize>().ok().filter(|&t| t < THEMES.len()).unwrap_or(c.theme),
                 "custom" => {
                     let n: Vec<f32> = v.split(',').filter_map(|x| x.parse::<f32>().ok()).filter(|x| x.is_finite()).collect();
@@ -173,7 +176,7 @@ impl Config {
     fn to_text(&self) -> String {
         let b = |x: bool| if x { "1" } else { "0" };
         let mut s = format!(
-            "size={}\nround={}\ntop={}\ndisplay={}\nspeed={}\nbounce={}\nmusic={}\npills={}\nrank={}\ntheme={}\ncustom={}\nhide_fs={}\nmic_dot={}\n",
+            "size={}\nround={}\ntop={}\ndisplay={}\nspeed={}\nbounce={}\nmusic={}\npills={}\nrank={}\ntheme={}\ncustom={}\nhide_fs={}\nmic_dot={}\nwelcomed={}\n",
             self.size,
             self.round,
             self.top,
@@ -187,6 +190,7 @@ impl Config {
             self.custom.iter().flatten().map(|x| x.to_string()).collect::<Vec<_>>().join(","),
             b(self.hide_fs),
             b(self.mic_dot),
+            b(self.welcomed),
         );
         for (id, on) in &self.apps {
             s += &format!("app={id}|{}\n", b(*on));
@@ -252,6 +256,7 @@ mod tests {
         c.theme = CUSTOM;
         c.hide_fs = false;
         c.mic_dot = false;
+        c.welcomed = true;
         c.custom = [[0.5, 0.25], [0.1, 0.9], [0.0, 0.5]];
         assert!(Config::parse(&c.to_text()) == c);
         // Bad values fall back to defaults.

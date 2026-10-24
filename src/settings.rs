@@ -588,7 +588,7 @@ impl App {
     }
 
     /// Horizontal gradient brush across x0..x1 through evenly spaced `stops`.
-    unsafe fn gradient(&self, x0: f32, x1: f32, stops: &[[f32; 3]]) -> Option<ID2D1LinearGradientBrush> {
+    pub(crate) unsafe fn gradient(&self, x0: f32, x1: f32, stops: &[[f32; 3]]) -> Option<ID2D1LinearGradientBrush> {
         let n = (stops.len() - 1) as f32;
         let st: Vec<D2D1_GRADIENT_STOP> = stops.iter().enumerate().map(|(i, c)| D2D1_GRADIENT_STOP { position: i as f32 / n, color: rgba(c[0], c[1], c[2], 1.0) }).collect();
         let rt: &ID2D1RenderTarget = &self.g.dc;

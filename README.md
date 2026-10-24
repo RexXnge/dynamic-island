@@ -18,7 +18,7 @@ cargo build --release
 
 Run `target/release/dynamic-island.exe`.
 
-Installer: after the build above, `cargo build --release` in `installer/` makes `dynamic-island-setup.exe`, a per-user installer (no admin) with a Start menu shortcut and an uninstaller in Settings > Apps. Settings live in `%APPDATA%\DynamicIsland\settings.ini`.
+Installer: after the build above, compile `installer/setup.iss` with [Inno Setup](https://jrsoftware.org/isinfo.php) (`ISCC installer\setup.iss`) to get `dist/DynamicIsland-Setup.exe`, a per-user installer (no admin) with Start menu and optional desktop shortcuts, an optional Start with Windows switch, and an uninstaller in Settings > Apps.
 
 ## License
 

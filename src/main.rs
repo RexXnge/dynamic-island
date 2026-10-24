@@ -10,7 +10,9 @@ mod media;
 mod settings;
 mod shelf;
 mod shot;
+mod picker;
 mod system;
+mod welcome;
 mod timer;
 
 use media::{Cmd, Media, Shared, ART, WM_MEDIA};
@@ -19,6 +21,7 @@ use extras::{FAV, WM_BRIGHT, WM_FAVICON, WM_FOCUS};
 use buds::WM_BUDS;
 use lyrics::WM_LYRICS;
 use shelf::{WM_SHELF_ADD, WM_SHELF_HOVER};
+use picker::WM_PICK;
 use system::WM_FULLSCREEN;
 use config::*;
 use settings::{accent, bg, fg, fg_rgb, surface, surface_rgb, SetUi};
@@ -47,7 +50,8 @@ use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM
 use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::System::Registry::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
+use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
+use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTimePreciseAsFileTime};
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::{DragQueryFileW, ShellExecuteW, HDROP};
@@ -67,6 +71,7 @@ const T_HOVER: usize = 1;
 const T_LEAVE: usize = 2;
 const T_CLIP: usize = 3;
 const T_MON: usize = 8; // follow-the-mouse display check
+const T_CLOCK: usize = 9; // wakes the expanded island when the clock's minute turns
 const WM_CLIPBOARDUPDATE: u32 = 0x031D;
 // "Copied" notice: (w, h, radius) and how long it stays.
 const CLIP: (f32, f32, f32) = (210.0, 40.0, 20.0);
@@ -87,6 +92,7 @@ const B_CLIPS: usize = 10; // after the timer views' buttons (6..9)
 const B_SHELF: usize = 11;
 const B_CALC: usize = 12;
 const B_POWER: usize = 13;
+const B_PICK: usize = 14; // colour picker
 // State fades in `App::fx`: things that used to pop in or out now ease.
 const FX_MIC: usize = 0; // recording dot
 const FX_MOON: usize = 1; // Focus moon on the resting pill
@@ -103,6 +109,7 @@ enum Note {
     Focus(bool),
     Download,
     Buds(Option<u8>), // battery %
+    Pick,             // colour picker: live swatch under the cursor
 }
 const ORANGE: (f32, f32, f32) = (1.0, 0.62, 0.04); // iOS system orange
 const GREEN: (f32, f32, f32) = (0.2, 0.84, 0.29);
@@ -273,6 +280,11 @@ struct Gfx {
     f_big: IDWriteTextFormat,
     f_cd: IDWriteTextFormat,
     f_row: IDWriteTextFormat,
+    f_hello: IDWriteTextFormat,  // welcome: "hello", centred (measures the word)
+    f_hello_l: IDWriteTextFormat, // welcome: one letter of it, left-aligned
+    f_wtitle: IDWriteTextFormat, // welcome page titles
+    f_wbody: IDWriteTextFormat,  // welcome page text, wraps
+    f_wbtn: IDWriteTextFormat,   // welcome buttons and subtitle, top-row clock
     f_seg: IDWriteTextFormat,
     f_calc: IDWriteTextFormat,
     f_calc_r: IDWriteTextFormat,
@@ -313,8 +325,8 @@ struct App {
     history: clips::History,
     mouse: (f32, f32), // last pointer position in canvas DIPs
     fx: [Spring; FX_N], // state fades, see FX_*
-    hot: [Spring; 14],  // top-row button hover, by button id
-    cur: [Spring; 14],  // top-row button is the open view, by button id
+    hot: [Spring; 15],  // top-row button hover, by button id
+    cur: [Spring; 15],  // top-row button is the open view, by button id
     dl: Option<Download>,
     dl_spin: Spring,                 // in-progress ring rotation, in turns
     dl_press: Option<(f32, f32)>,    // pressed on a finished download: click opens, drag moves it out
@@ -345,7 +357,9 @@ struct App {
     // Timer.
     view: View,
     xd: [Spring; 3], // expanded (w, h, r) for the current view
-    va: [Spring; 7], // per-view content opacity, indexed by View
+    va: [Spring; 8], // per-view content opacity, indexed by View
+    wpage: Spring,   // welcome page, fractional while turning
+    w_t0: f32,       // when the current welcome page came in, in `t` seconds
     // File shelf.
     shelf: Vec<shelf::Item>,
     shelf_drop: Spring, // files hovering over the island
@@ -363,6 +377,7 @@ struct App {
     lyric_in: Spring,
     ly_c: Spring, // compact pill's lyric row, 0 -> 1
     hidden: bool, // out of the way of a fullscreen app
+    clock_min: std::cell::Cell<u16>, // minute the top-row clock last drew, so a new one redraws
     shown: Spring, // 0 hidden -> 1 shown: the whole island pops in or shrinks away
     scaled: bool,  // the composition visual still carries a show/hide transform
     timer: Option<Timer>,
@@ -450,8 +465,8 @@ fn main() -> Result<()> {
                 history: Default::default(),
                 mouse: (0.0, 0.0),
                 fx: [spring(0.0); FX_N],
-                hot: [spring(0.0); 14],
-                cur: [spring(0.0); 14],
+                hot: [spring(0.0); 15],
+                cur: [spring(0.0); 15],
                 dl: None,
                 dl_spin: spring(0.0),
                 dl_press: None,
@@ -481,7 +496,9 @@ fn main() -> Result<()> {
                 rgn: (0, 0, 0, 0),
                 view: View::Player,
                 xd: [spring(EXPANDED.0), spring(EXPANDED.1), spring(EXPANDED.2)],
-                va: [spring(1.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0)],
+                va: [spring(1.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0)],
+                wpage: spring(0.0),
+                w_t0: 0.0,
                 shelf: Vec::new(),
                 shelf_drop: spring(0.0),
                 shelf_press: None,
@@ -496,6 +513,7 @@ fn main() -> Result<()> {
                 lyric_in: spring(1.0),
                 ly_c: spring(0.0),
                 hidden: false,
+                clock_min: std::cell::Cell::new(u16::MAX),
                 shown: Spring { x: 0.0, v: 0.0, to: 1.0 }, // pops in on launch
                 scaled: false,
                 timer: None,
@@ -511,6 +529,7 @@ fn main() -> Result<()> {
         APP.with(|a| a.borrow_mut().as_mut().map(|app| app.on_fullscreen(system::fullscreen_now(hwnd))));
         if APP.with(|a| a.borrow().as_ref().is_some_and(|app| !app.hidden)) {
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            APP.with(|a| a.borrow_mut().as_mut().filter(|app| !app.cfg.welcomed).map(App::open_welcome));
         }
 
         // Render only while something moves; otherwise block in GetMessage (0% CPU).
@@ -706,6 +725,16 @@ unsafe fn gfx(hwnd: HWND, dpi: f32) -> Result<Gfx> {
         f_big: fmt(34.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?,
         f_cd: fmt(15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
         f_row: fmt(13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+        f_hello: fmt(46.0, DWRITE_FONT_WEIGHT_LIGHT, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+        f_hello_l: fmt(46.0, DWRITE_FONT_WEIGHT_LIGHT, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+        f_wtitle: fmt(17.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+        f_wbody: {
+            let f = fmt(12.5, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+            f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+            f
+        },
+        f_wbtn: fmt(12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER)?,
         f_seg: fmt(11.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER)?,
         f_calc: fmt(24.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
         f_calc_r: fmt(17.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
@@ -745,6 +774,18 @@ fn rrect(x: f32, y: f32, w: f32, h: f32, r: f32) -> D2D1_ROUNDED_RECT {
 fn mat(sx: f32, sy: f32, tx: f32, ty: f32) -> Matrix3x2 {
     Matrix3x2 { M11: sx, M12: 0.0, M21: 0.0, M22: sy, M31: tx, M32: ty }
 }
+/// Local time as the user formats it (no seconds), its minute of the day, and ms to the next minute.
+fn clock() -> (String, u16, u32) {
+    unsafe {
+        let st = GetLocalTime();
+        let mut buf = [0u16; 32];
+        let n = GetTimeFormatEx(PCWSTR::null(), TIME_NOSECONDS, Some(&st), PCWSTR::null(), Some(&mut buf));
+        let text = if n > 1 { String::from_utf16_lossy(&buf[..n as usize - 1]) } else { format!("{:02}:{:02}", st.wHour, st.wMinute) };
+        let ms = 60_000 - (st.wSecond as u32 * 1000 + st.wMilliseconds as u32);
+        (text, st.wHour * 60 + st.wMinute, ms)
+    }
+}
+
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
@@ -789,13 +830,15 @@ impl App {
             || self.settings_busy()
             || [self.shelf_drop, self.calc_copied, self.lyric_in, self.ly_c].iter().any(|s| !s.settled())
             || self.fx_busy()
+            || self.welcome_busy()
+            || (self.expand.x > 0.5 && clock().1 != self.clock_min.get())
     }
 
     /// Where every state fade should head, from the state it shows.
-    fn fx_targets(&self) -> ([f32; FX_N], [f32; 14], [f32; 14]) {
+    fn fx_targets(&self) -> ([f32; FX_N], [f32; 15], [f32; 15]) {
         let b = |x: bool| x as u8 as f32;
         let fx = [b(self.mic_live()), b(self.focus_active), b(self.muted), b(self.mic_muted), b(!self.shelf.is_empty()), b(self.timer.is_some())];
-        let (mut hot, mut cur) = ([0.0; 14], [0.0; 14]);
+        let (mut hot, mut cur) = ([0.0; 15], [0.0; 15]);
         let l = self.layout();
         let (mx, my) = self.mouse;
         let live = self.hover && self.expanded_alpha(&l).0 > 0.5;
@@ -1067,6 +1110,7 @@ impl App {
         self.calc_copied.step(dt, 1.4, 1.0);
         self.lyrics_step(dt);
         self.fx_step(dt);
+        self.welcome_step(dt);
         // Appear: pop with a little overshoot. Hide: quick and calm, it's in a game's way.
         let (resp, damp) = if self.shown.to > 0.5 { (0.42, 0.7) } else { (0.26, 1.0) };
         self.shown.step(dt, resp, damp);
@@ -1288,6 +1332,12 @@ impl App {
                 dc.PopAxisAlignedClip();
             }
         }
+        let wa = self.big_alpha(&l) * self.va[View::Welcome as usize].x;
+        if wa > 0.0 {
+            dc.PushAxisAlignedClip(&rect(l.x, l.y, l.w, l.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            self.draw_welcome(&l, wa);
+            dc.PopAxisAlignedClip();
+        }
         if clips_a > 0.0 {
             dc.PushAxisAlignedClip(&rect(l.x, l.y, l.w, l.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
             self.draw_clips(&l, clips_a);
@@ -1311,6 +1361,14 @@ impl App {
                 }
                 self.top_icon(id, cx, cy + dy, k * (1.0 + 0.06 * h), ta);
             }
+            // Clock in the middle of the row, local time in the user's own format.
+            let (now, min, ms) = clock();
+            br.SetColor(&fg(ta * 0.9));
+            let tx: Vec<u16> = now.encode_utf16().collect();
+            dc.DrawText(&tx, &g.f_wbtn, &rect(l.x + l.w / 2.0 - 50.0, l.y + 10.0 + dy, 100.0, 20.0), br, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+            if self.clock_min.replace(min) != min {
+                SetTimer(self.hwnd, T_CLOCK, ms + 50, None); // the timer only wakes the loop; animating() sees the new minute
+            }
         }
         if self.media.is_none() && self.timer.is_none() {
             let a = clamp01(1.0 - self.clip.x * 2.0) * clamp01(1.0 - self.vol.x * 2.0) * clamp01(1.0 - l.e * 3.0);
@@ -1331,6 +1389,8 @@ impl App {
                 self.download_icon(ccx, ccy, k, ca);
             } else if matches!(self.note, Note::Buds(_)) {
                 self.headphones(ccx, ccy, k, ca);
+            } else if self.note == Note::Pick {
+                self.top_icon(B_PICK, ccx, ccy, 1.35 * k, ca);
             } else if self.link.is_some() {
                 // Favicon once it arrives, a globe until then (or if the site has none).
                 let fa = if self.favicon.is_some() { clamp01(self.check.x) } else { 0.0 };
@@ -1413,6 +1473,7 @@ impl App {
                 Note::Focus(_) => ("Focus", &self.clip_text),
                 Note::Download => (if self.dl.as_ref().is_some_and(|d| d.done) { "Downloaded" } else { "Downloading" }, &self.clip_text),
                 Note::Buds(_) => (&self.clip_text, "Connected"),
+                Note::Pick => ("Pick a colour", &self.clip_text),
             };
             let has_preview = !sub.is_empty();
             br.SetColor(&fg(ca));
@@ -1480,20 +1541,26 @@ impl App {
         } else {
             v[1].1 = l.x + 54.0;
         }
+        v.push((B_PICK, v[1].1 + 24.0, cy));
         v
     }
 
     /// Opacity of the expanded top row (shown over the player, the clipboard list and settings),
     /// of the list, and of settings.
     fn expanded_alpha(&self, l: &Layout) -> (f32, f32, f32, f32, f32) {
-        let cf = clamp01(1.0 - self.clip.x * 2.0) * clamp01(1.0 - self.vol.x * 2.0);
-        let big = clamp01((l.e - 0.4) / 0.6) * clamp01((self.music.x.max(l.e) - 0.4) / 0.6) * cf;
+        let big = self.big_alpha(l);
         let player = if self.media.is_some() { self.va[View::Player as usize].x } else { 0.0 };
         let clips = big * self.va[View::Clips as usize].x;
         let set = big * self.va[View::Settings as usize].x;
         let shelf = big * self.va[View::Shelf as usize].x;
         let calc = big * self.va[View::Calc as usize].x;
         (big * player + clips + set + shelf + calc, clips, set, shelf, calc)
+    }
+
+    /// Opacity of expanded-only content: late in the expansion, and out of a notice's way.
+    fn big_alpha(&self, l: &Layout) -> f32 {
+        let cf = clamp01(1.0 - self.clip.x * 2.0) * clamp01(1.0 - self.vol.x * 2.0);
+        clamp01((l.e - 0.4) / 0.6) * clamp01((self.music.x.max(l.e) - 0.4) / 0.6) * cf
     }
 
     /// Recording dot, unless switched off in settings.
@@ -1600,6 +1667,19 @@ impl App {
                     dc.FillEllipse(&D2D1_ELLIPSE { point: p(20.5, 4.0), radiusX: 2.6 * k * d, radiusY: 2.6 * k * d }, br);
                 }
             }
+            B_PICK => {
+                // Eyedropper, SF Symbols style: drawn upright, then tilted so the bulb sits top right.
+                let rr = |x0: f32, y0: f32, x1: f32, y1: f32, r: f32| {
+                    let o = p(x0, y0);
+                    rrect(o.x, o.y, (x1 - x0) * s, (y1 - y0) * s, r * s)
+                };
+                dc.SetTransform(&Matrix3x2::rotation(45.0, cx, cy));
+                dc.FillRoundedRectangle(&rr(9.3, 1.2, 14.7, 7.4, 2.7), br); // squeeze bulb
+                dc.FillRoundedRectangle(&rr(7.4, 7.6, 16.6, 9.8, 1.1), br); // collar
+                dc.DrawRoundedRectangle(&rr(10.1, 10.6, 13.9, 18.4, 1.4), br, 1.7 * s, caps); // glass tube
+                line(12.0, 19.2, 12.0, 22.2, 1.7); // tip
+                dc.SetTransform(&Matrix3x2::identity());
+            }
             B_POWER => {
                 // Power symbol: a ring open at the top, and a stem through the gap.
                 dc.SetTransform(&Matrix3x2::rotation(40.0, cx, cy));
@@ -1688,7 +1768,7 @@ impl App {
         let r = self.cfg.rank_of(kind);
         let above = |k: u8| k != kind && self.cfg.rank_of(k) < r;
         let note = match self.note {
-            Note::Copy => K_COPIED,
+            Note::Copy | Note::Pick => K_COPIED,
             Note::Focus(_) => K_FOCUS,
             Note::Download => K_DOWNLOADS,
             Note::Buds(_) => K_EARBUDS,
@@ -1747,6 +1827,7 @@ impl App {
             Note::Focus(_) => (K_FOCUS, P_FOCUS),
             Note::Download => (K_DOWNLOADS, P_DOWNLOADS),
             Note::Buds(_) => (K_EARBUDS, P_EARBUDS),
+            Note::Pick => (K_COPIED, P_COPIED),
         };
         if !self.cfg.pills[pill] || !self.may_show(kind) {
             return;
@@ -1871,6 +1952,9 @@ impl App {
             self.expand.to = 1.0;
             return;
         }
+        if self.view == View::Welcome {
+            return self.welcome_click(x, y);
+        }
         if self.expanded_alpha(&l).0 > 0.5 {
             for (id, cx, cy) in self.top_buttons(&l) {
                 if (x - cx).hypot(y - cy) < 13.0 {
@@ -1887,6 +1971,7 @@ impl App {
                         // Toggles between the list and the player (or stays when nothing plays).
                         B_CLIPS => self.set_view(if self.view == View::Clips && self.media.is_some() { View::Player } else { View::Clips }),
                         B_POWER => unsafe { PostQuitMessage(0) },
+                        B_PICK => self.start_pick(),
                         B_SHELF => self.set_view(if self.view == View::Shelf { self.default_view() } else { View::Shelf }),
                         B_CALC => {
                             if self.view == View::Calc {
@@ -1985,6 +2070,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 return None;
             }
+            WM_PICK => app.on_pick(wp.0, lp.0 as u32),
             WM_BUDS => {
                 let (name, battery) = *Box::from_raw(lp.0 as *mut (String, Option<u8>));
                 app.on_buds(name, battery);
@@ -2081,6 +2167,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     app.expand.to = 1.0;
                 } else if wp.0 == T_LEAVE && !app.hover && !app.sl.drag && app.wdrag.is_none() && app.su.drag.is_none() && app.shelf_press.is_none() && app.shelf_drop.to < 0.5
                     && !(app.view == View::Calc && GetForegroundWindow() == hwnd)
+                    && app.view != View::Welcome // the tour closes with its own buttons
                 {
                     app.expand.to = 0.0;
                 }

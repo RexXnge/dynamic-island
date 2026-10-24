@@ -12,6 +12,7 @@ pub enum View {
     Settings, // src/settings.rs
     Shelf,    // src/shelf.rs
     Calc,     // src/calc.rs
+    Welcome,  // src/welcome.rs, first run only
 }
 
 pub const PICK: (f32, f32, f32) = (340.0, 214.0, 42.0);
@@ -84,6 +85,7 @@ impl App {
             View::Settings => settings::SETTINGS,
             View::Shelf => self.shelf_size(),
             View::Calc => calc::CALC,
+            View::Welcome => welcome::WELCOME,
         };
         self.xd[0].to = d.0;
         self.xd[1].to = d.1;
@@ -261,7 +263,7 @@ impl App {
         let l = self.layout();
         let hit = |(cx, cy): (f32, f32)| (x - cx).hypot(y - cy) < 25.0;
         match self.view {
-            View::Player | View::Clips | View::Settings | View::Shelf | View::Calc => return false,
+            View::Player | View::Clips | View::Settings | View::Shelf | View::Calc | View::Welcome => return false,
             View::Pick => {
                 let [cancel, start] = Self::pick_buttons(&l);
                 if hit(cancel) {

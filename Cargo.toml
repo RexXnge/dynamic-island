@@ -1,6 +1,6 @@
 [package]
 name = "dynamic-island"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "MIT"
 
@@ -22,6 +22,7 @@ features = [
     "Web_Http",
     "Win32_Devices_Display",
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_Direct3D",

@@ -92,6 +92,9 @@ impl App {
             unsafe {
                 let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
             }
+            if !self.cfg.welcomed && self.view != View::Welcome {
+                self.open_welcome(); // launched behind a fullscreen app: welcome once it's back
+            }
         }
         self.last = Instant::now(); // don't jump animations on the way back
     }
