@@ -17,3 +17,7 @@ cargo build --release
 ```
 
 Run `target/release/dynamic-island.exe`. Settings live in `%APPDATA%\DynamicIsland\settings.ini`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

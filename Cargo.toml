@@ -2,6 +2,7 @@
 name = "dynamic-island"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 windows-core = "0.58" # required by #[implement] for the volume callback
