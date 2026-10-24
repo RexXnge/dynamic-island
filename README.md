@@ -1,6 +1,17 @@
 # Dynamic Island for Windows
 
+<p>
+  <a href="https://github.com/RexXnge/dynamic-island/releases/latest"><img src="https://img.shields.io/github/v/release/RexXnge/dynamic-island?label=version" alt="Latest version"></a>
+  <a href="https://github.com/RexXnge/dynamic-island/releases"><img src="https://img.shields.io/github/downloads/RexXnge/dynamic-island/total" alt="Total downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4" alt="Windows 10 / 11">
+</p>
+
 An Apple-style Dynamic Island for Windows, written in Rust with Direct2D and DirectComposition. It renders only while something animates, so it idles at 0% CPU.
+
+<p align="center"><a href="https://github.com/RexXnge/dynamic-island/releases/latest/download/DynamicIsland-Setup.exe"><img src="https://img.shields.io/badge/Download-DynamicIsland--Setup.exe-0078D4?style=for-the-badge" alt="Download DynamicIsland-Setup.exe" height="40"></a></p>
+
+<p align="center">Windows 10 or 11 (64-bit). Installs for your account only: no admin rights, no .NET or other runtimes.</p>
 
 <p align="center"><img src="docs/demo.gif" alt="The island expanding from the compact music pill into the player and back" width="520"></p>
 
