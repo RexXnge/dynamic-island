@@ -334,7 +334,7 @@ impl App {
         dc.DrawText(&state.encode_utf16().collect::<Vec<_>>(), &g.f_artist_s, &rect(r.left + 48.0, cy + 1.0, w - 54.0, 15.0), br, opts, mm);
     }
 
-    unsafe fn wifi_icon(&self, cx: f32, cy: f32, k: f32, a: f32) {
+    pub(crate) unsafe fn wifi_icon(&self, cx: f32, cy: f32, k: f32, a: f32) {
         let (dc, br, caps) = (&self.g.dc, &self.g.brush, &self.g.caps);
         let p = |x: f32, y: f32| D2D_POINT_2F { x: cx + x * k, y: cy + y * k };
         br.SetColor(&fg(a));
@@ -353,7 +353,7 @@ impl App {
         }
     }
 
-    unsafe fn bt_icon(&self, cx: f32, cy: f32, k: f32, a: f32) {
+    pub(crate) unsafe fn bt_icon(&self, cx: f32, cy: f32, k: f32, a: f32) {
         let (dc, br, caps) = (&self.g.dc, &self.g.brush, &self.g.caps);
         let p = |x: f32, y: f32| D2D_POINT_2F { x: cx + x * k, y: cy + y * k };
         br.SetColor(&fg(a));

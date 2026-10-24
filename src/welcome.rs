@@ -1,11 +1,11 @@
-// First-run welcome: the island opens by itself into a short four-page tour. Page one greets
-// you with "hello" in a few languages; the others introduce music, the tools and
-// settings with small animated illustrations. Pages slide and crossfade; Skip or Get started
+// First-run welcome: the island opens by itself into a tour of everything it does. Page one
+// greets you with "hello" in a few languages; the others show how to use music, Control Center,
+// the tools, the shelf, notices and settings, each with a small animated illustration. Pages slide and crossfade; Skip or Get started
 // collapses it for good (`welcomed` in settings.ini).
 use super::*;
 
 pub const WELCOME: (f32, f32, f32) = (340.0, 214.0, 40.0);
-const PAGES: usize = 4;
+const PAGES: usize = 7;
 const B_NEXT: usize = 30; // press-scale ids; above every top-row button id
 const B_SKIP: usize = 31;
 const FOOT: f32 = 30.0; // footer row centre, from the bottom edge
@@ -94,22 +94,33 @@ impl App {
             let body_y = l.y + 112.0;
             let (title, body) = match page {
                 0 => ("Welcome to Dynamic Island", "A quiet home for music, timers and quick tools, right at the top of your screen."),
-                1 => ("Music, front and center", "Hover the pill to peek at what's playing. Click to open the full player."),
-                2 => ("Your tools, one click away", "Clipboard history, a file shelf, a calculator and timers live in the top row."),
-                _ => ("Make it yours", "Pick a theme, size and motion in Settings, the gear at the top right."),
+                1 => ("Music, front and center", "Hover the pill to peek at what's playing. Click it for the full player to skip, pause or scrub."),
+                2 => ("Control Center", "Scroll down on the island for Wi-Fi, Bluetooth, mic, sound, brightness and dark mode. Scroll up to go back."),
+                3 => ("Your tools, one click away", "Clipboard history, the file shelf, a calculator and timers sit in the top row when it's open."),
+                4 => ("A shelf for files", "Drag files onto the island to park them, then drag them out wherever you need them."),
+                5 => ("Quick notices", "Copied text, screenshots, downloads, USB devices and earbuds pop up as small pills."),
+                _ => ("Make it yours", "Pick a theme, size and motion in Settings, the gear at the top right. Any pill can be turned off there."),
             };
             match page {
                 0 => self.hello(l.x + ox, l.y + 22.0 + rise(0.0), l.w, pa, t),
                 1 => self.wave_art(l.x + l.w / 2.0 + ox, l.y + 50.0 + rise(0.0), pa * fade(0.0)),
-                2 => {
-                    // Tool icons pop in one after another.
-                    for (i, id) in [B_CLIPS, B_SHELF, B_CALC, B_TIMER].into_iter().enumerate() {
+                2 => self.control_art(l.x + l.w / 2.0 + ox, l.y + 50.0 + rise(0.0), pa * fade(0.0)),
+                4 => self.shelf_art(l.x + l.w / 2.0 + ox, l.y + 50.0 + rise(0.0), pa * fade(0.0), t),
+                3 | 5 => {
+                    // Icons pop in one after another: the tools, or what shows up as a notice.
+                    let n = if page == 3 { 4 } else { 3 };
+                    for i in 0..n {
                         let k = if entering { back_out((t - 0.08 * i as f32) / 0.5) } else { 1.0 };
                         if k > 0.0 {
-                            let cx = l.x + l.w / 2.0 + ox + (i as f32 - 1.5) * 44.0;
-                            br.SetColor(&surface(pa * clamp01(k)));
-                            dc.FillRoundedRectangle(&rrect(cx - 17.0 * k, l.y + 50.0 - 17.0 * k, 34.0 * k, 34.0 * k, 11.0 * k), br);
-                            self.top_icon(id, cx, l.y + 50.0, 1.25 * k, pa * clamp01(k));
+                            let (cx, cy, ka) = (l.x + l.w / 2.0 + ox + (i as f32 - (n - 1) as f32 / 2.0) * 44.0, l.y + 50.0, pa * clamp01(k));
+                            br.SetColor(&surface(ka));
+                            dc.FillRoundedRectangle(&rrect(cx - 17.0 * k, cy - 17.0 * k, 34.0 * k, 34.0 * k, 11.0 * k), br);
+                            match (page, i) {
+                                (3, _) => self.top_icon([B_CLIPS, B_SHELF, B_CALC, B_TIMER][i], cx, cy, 1.25 * k, ka),
+                                (_, 0) => self.top_icon(B_CLIPS, cx, cy, 1.25 * k, ka),
+                                (_, 1) => self.usb_icon(cx, cy, 0.85 * k, ka, true, 1.0),
+                                _ => self.headphones(cx, cy, 0.85 * k, ka),
+                            }
                         }
                     }
                 }
@@ -138,13 +149,14 @@ impl App {
 
         // Footer: page dots (the current one stretches into a pill), Skip, Next / Get started.
         let (next, skip, cy) = Self::footer(l);
-        let mut dx = l.x + l.w / 2.0 - 30.0;
+        // Seven pages: smaller dots so the row fits between Skip and Next.
+        let mut dx = l.x + l.w / 2.0 - ((PAGES - 1) as f32 * 10.0 + 15.0) / 2.0;
         for i in 0..PAGES {
             let on = clamp01(1.0 - (i as f32 - p).abs());
-            let dw = 6.0 + 12.0 * on;
+            let dw = 5.0 + 10.0 * on;
             br.SetColor(&fg(a * (0.25 + 0.65 * on)));
-            dc.FillRoundedRectangle(&rrect(dx, cy - 3.0, dw, 6.0, 3.0), br);
-            dx += dw + 6.0;
+            dc.FillRoundedRectangle(&rrect(dx, cy - 2.5, dw, 5.0, 2.5), br);
+            dx += dw + 5.0;
         }
         let last = clamp01(p - (PAGES - 2) as f32); // 0 -> 1 across the final page turn
         let press = |id: usize| if self.pressed == Some(id) { 1.0 - 0.08 * self.press.x } else { 1.0 };
@@ -194,6 +206,48 @@ impl App {
             let Ok(cl) = g.dw.CreateTextLayout(&one, &g.f_hello_l, cw + 30.0, 56.0) else { continue };
             br.SetColor(&fg(la));
             dc.DrawTextLayout(D2D_POINT_2F { x: r.left + 2.0, y: r.top }, &cl, br, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        }
+    }
+
+    /// A tiny Control Center: Wi-Fi on, Bluetooth off, and a level slider breathing up and down.
+    unsafe fn control_art(&self, cx: f32, cy: f32, a: f32) {
+        let (dc, br) = (&self.g.dc, &self.g.brush);
+        br.SetColor(&surface(a));
+        dc.FillRoundedRectangle(&rrect(cx - 62.0, cy - 22.0, 82.0, 44.0, 14.0), br);
+        let disc = |x: f32, on: bool| {
+            br.SetColor(&fg(a * if on { 1.0 } else { 0.12 }));
+            dc.FillEllipse(&D2D1_ELLIPSE { point: D2D_POINT_2F { x, y: cy }, radiusX: 14.0, radiusY: 14.0 }, br);
+        };
+        disc(cx - 41.0, true);
+        settings::swap_fg_bg(|| self.wifi_icon(cx - 41.0, cy, 0.75, a));
+        disc(cx - 1.0, false);
+        self.bt_icon(cx - 1.0, cy, 0.75, a);
+        let (sx, sw) = (cx + 28.0, 28.0);
+        br.SetColor(&surface(a));
+        dc.FillRoundedRectangle(&rrect(sx, cy - 22.0, sw, 44.0, 10.0), br);
+        let v = 0.45 + 0.25 * (self.t * 1.6).sin();
+        dc.PushAxisAlignedClip(&rect(sx, cy + 22.0 - 44.0 * v, sw, 44.0 * v), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        br.SetColor(&fg(a * 0.92));
+        dc.FillRoundedRectangle(&rrect(sx, cy - 22.0, sw, 44.0, 10.0), br);
+        dc.PopAxisAlignedClip();
+    }
+
+    /// The shelf with a file dropping into it, over and over.
+    unsafe fn shelf_art(&self, cx: f32, cy: f32, a: f32, t: f32) {
+        let (dc, br) = (&self.g.dc, &self.g.brush);
+        br.SetColor(&surface(a));
+        dc.FillRoundedRectangle(&rrect(cx - 17.0, cy - 11.0, 34.0, 34.0, 11.0), br);
+        self.top_icon(B_SHELF, cx, cy + 6.0, 1.25, a);
+        let ph = (t % 1.8) / 1.8;
+        let fall = smooth(ph / 0.55);
+        let fa = a * smooth(ph / 0.15) * (1.0 - smooth((ph - 0.55) / 0.2));
+        if fa > 0.0 {
+            let (fx, fy) = (cx - 6.0, cy - 30.0 + 22.0 * fall);
+            br.SetColor(&fg(fa));
+            dc.FillRoundedRectangle(&rrect(fx, fy, 12.0, 15.0, 2.5), br);
+            br.SetColor(&bg(fa));
+            dc.FillRectangle(&rect(fx + 3.0, fy + 5.0, 6.0, 1.4), br);
+            dc.FillRectangle(&rect(fx + 3.0, fy + 8.5, 6.0, 1.4), br);
         }
     }
 
