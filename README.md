@@ -29,7 +29,7 @@ An Apple-style Dynamic Island for Windows, written in Rust with Direct2D and Dir
 - Calculator and unit converter
 - Themes with custom colours, size, corners, motion and per-pill settings
 - Hides while a game or video is fullscreen; optional start with Windows
-- Updates itself from GitHub releases
+- Updates from GitHub releases: an "Update available" pill, installed when you click it (turn off the Updates switch in Settings > Pills to stop checking)
 
 The exe isn't code-signed, so Windows SmartScreen may warn on first run: click "More info", then "Run anyway".
 
@@ -38,7 +38,7 @@ The exe isn't code-signed, so Windows SmartScreen may warn on first run: click "
 - **Open source:** MIT licensed, every line is here to read.
 - **No account, no telemetry:** nothing to sign up for, and it doesn't collect or send usage data.
 - **Works offline:** everything runs on your PC. The only network requests are:
-  - an update check against GitHub releases (30 s after launch, then every 6 hours)
+  - an update check against GitHub releases (30 s after launch, then every 6 hours; the Updates switch turns it off)
   - the site's icon when you copy an https link to a public site (just `https://<host>/favicon.ico`; never local or plain-http addresses; turn off the Link pill to stop it)
   - synced lyrics from lrclib.net, off by default
 - **Native and small:** Rust with Direct2D, no Electron or browser engine, under 1 MB.

@@ -2,6 +2,7 @@
 // A newer tag shows an "Update available" pill; clicking it downloads the release's installer,
 // checks its SHA-256 against the digest GitHub publishes for the asset, and runs it silently
 // (the installer stops the island and starts the new one). Nothing runs unless the hash matches.
+// The Updates switch (Pills page) turns all of this off, including the check itself.
 // shortcut: the repo must be public; a private repo's API answers 404, so no update is found.
 use super::*;
 use std::os::windows::process::CommandExt;
@@ -107,7 +108,12 @@ impl App {
 
     /// T_UPDATE: show a found update again, or look for one.
     pub fn update_tick(&mut self) {
-        if self.update.is_some() {
+        if !self.cfg.pills[P_UPDATES] {
+            self.update = None;
+            unsafe {
+                let _ = KillTimer(self.hwnd, T_UPDATE); // switching Updates back on restarts it
+            }
+        } else if self.update.is_some() {
             self.show_update();
         } else {
             check(self.hwnd);

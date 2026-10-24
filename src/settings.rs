@@ -9,6 +9,7 @@ const TAB_Y: f32 = 46.0; // tab bar centre, from the island top
 const ROWS_Y: f32 = 64.0; // first row's top
 const ROW: f32 = 24.0;
 const RANK_ROW: f32 = 20.0;
+const PILL_ROWS: usize = 7; // Pills page: switches per column
 
 pub enum Drag {
     Slider(usize),  // 0 corners, 1 top gap, 2 speed, 3 bounce
@@ -19,7 +20,7 @@ pub enum Drag {
 pub struct SetUi {
     page: usize,
     tab: Spring,
-    tog: [Spring; 12],
+    tog: [Spring; PILLS.len()],
     seg: [Spring; 4], // size, display, feel, music mode (x = selected index)
     sl: [Slider; 4],
     pub drag: Option<Drag>,
@@ -41,7 +42,7 @@ impl SetUi {
         SetUi {
             page: 0,
             tab: spring(0.0),
-            tog: [spring(0.0); 12],
+            tog: [spring(0.0); PILLS.len()],
             seg: [spring(0.0); 4],
             sl: [Slider::new(0.0), Slider::new(0.0), Slider::new(0.0), Slider::new(0.0)],
             drag: None,
@@ -181,6 +182,9 @@ impl App {
         if c.pills[P_LYRICS] != old.pills[P_LYRICS] {
             self.want_lyrics();
         }
+        if c.pills[P_UPDATES] && !old.pills[P_UPDATES] {
+            self.start_update_checks();
+        }
         if !matches!(self.su.drag, Some(Drag::Slider(_) | Drag::Color(_))) {
             c.save(); // drags save once, on release
         }
@@ -307,8 +311,8 @@ impl App {
                 }
             }
             (2, 3) => self.su.pv.to = 1.0 - self.su.pv.to,
-            (3, r) => {
-                let i = r + if x > l.x + l.w / 2.0 { 6 } else { 0 };
+            (3, r) if r < PILL_ROWS => {
+                let i = r + if x > l.x + l.w / 2.0 { PILL_ROWS } else { 0 };
                 if i < PILLS.len() {
                     self.cfg.pills[i] = !self.cfg.pills[i];
                 }
@@ -480,7 +484,7 @@ impl App {
             }
             3 => {
                 for (i, name) in PILLS.iter().enumerate() {
-                    let (col, row) = (i / 6, i % 6);
+                    let (col, row) = (i / PILL_ROWS, i % PILL_ROWS);
                     let cx0 = l.x + 24.0 + col as f32 * (l.w / 2.0 - 12.0);
                     let right = cx0 + l.w / 2.0 - 44.0;
                     let cy = Self::row_cy(l, row);

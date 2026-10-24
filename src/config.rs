@@ -17,7 +17,7 @@ pub const CUSTOM: usize = 5;
 pub const MUSIC_MODES: [&str; 4] = ["All apps", "Spotify", "No browsers", "Choose"];
 
 /// Pill switches, in the order the Pills page lists them.
-pub const PILLS: [&str; 12] = ["Music", "Timer", "Copied", "Screenshot", "Colour", "Link", "Volume", "Brightness", "Focus", "Downloads", "Devices", "Lyrics"];
+pub const PILLS: [&str; 13] = ["Music", "Timer", "Copied", "Screenshot", "Colour", "Link", "Volume", "Brightness", "Focus", "Downloads", "Devices", "Lyrics", "Updates"];
 pub const P_MUSIC: usize = 0;
 pub const P_TIMER: usize = 1;
 pub const P_COPIED: usize = 2;
@@ -31,6 +31,7 @@ pub const P_FOCUS: usize = 8;
 pub const P_DOWNLOADS: usize = 9;
 pub const P_EARBUDS: usize = 10;
 pub const P_LYRICS: usize = 11; // off by default: sends track names to lrclib.net
+pub const P_UPDATES: usize = 12; // off: no update pill and no check against GitHub at all
 
 /// Things that compete for the island, for the Priority page. Lower rank wins.
 pub const KINDS: [&str; 7] = ["Volume", "Copied", "Downloads", "Earbuds", "Focus", "Timer", "Music"];
@@ -50,7 +51,7 @@ pub struct Config {
     pub display: i32, // -1 follows the mouse, 0 the main display, n the n-th other one
     pub speed: f32,   // spring response multiplier, 0.5..1.6
     pub bounce: f32,  // 0 none .. 1 a lot
-    pub pills: [bool; 12],
+    pub pills: [bool; 13],
     pub rank: [u8; 7], // kinds, best first
     pub music: usize,  // index into MUSIC_MODES
     pub apps: Vec<(String, bool)>, // media apps seen so far, and whether "Choose" allows them

@@ -1,6 +1,7 @@
 // First-run welcome: the island opens by itself into a tour of everything it does. Page one
 // greets you with "hello" in a few languages; the others show how to use music, Control Center,
-// the tools, the shelf, notices and settings, each with a small animated illustration. Pages slide and crossfade; Skip or Get started
+// the tools, the shelf, notices and settings, each with a small animated illustration. Pages slide and crossfade; the last one
+// links to the GitHub repo for a star. Skip or Get started
 // collapses it for good (`welcomed` in settings.ini).
 use super::*;
 
@@ -8,6 +9,8 @@ pub const WELCOME: (f32, f32, f32) = (340.0, 214.0, 40.0);
 const PAGES: usize = 7;
 const B_NEXT: usize = 30; // press-scale ids; above every top-row button id
 const B_SKIP: usize = 31;
+const B_STAR: usize = 32;
+const REPO: &str = "https://github.com/RexXnge/dynamic-island";
 const FOOT: f32 = 30.0; // footer row centre, from the bottom edge
 
 /// Ease-out with a little overshoot, for things that pop in.
@@ -40,15 +43,17 @@ impl App {
         self.view == View::Welcome && (self.expand.to > 0.5 || !self.expand.settled()) || !self.wpage.settled()
     }
 
-    fn footer(l: &Layout) -> (D2D_RECT_F, D2D_RECT_F, f32) {
+    /// Next, Skip, the "Star on GitHub" link that takes Skip's place on the last page, and the row's centre.
+    fn footer(l: &Layout) -> (D2D_RECT_F, D2D_RECT_F, D2D_RECT_F, f32) {
         let cy = l.y + l.h - FOOT;
         let next = rect(l.x + l.w - 22.0 - 104.0, cy - 15.0, 104.0, 30.0);
         let skip = rect(l.x + 14.0, cy - 15.0, 64.0, 30.0);
-        (next, skip, cy)
+        let star = rect(l.x + 10.0, cy - 15.0, 112.0, 30.0);
+        (next, skip, star, cy)
     }
 
     pub fn welcome_click(&mut self, x: f32, y: f32) {
-        let (next, skip, _) = Self::footer(&self.layout());
+        let (next, skip, star, _) = Self::footer(&self.layout());
         let inside = |r: &D2D_RECT_F| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
         let page = self.wpage.to as usize;
         if inside(&next) {
@@ -64,6 +69,13 @@ impl App {
             self.pressed = Some(B_SKIP);
             self.press = Spring { x: 1.0, v: 0.0, to: 0.0 };
             self.close_welcome();
+        } else if inside(&star) && page + 1 == PAGES {
+            self.pressed = Some(B_STAR);
+            self.press = Spring { x: 1.0, v: 0.0, to: 0.0 };
+            unsafe {
+                let _ = AllowSetForegroundWindow(ASFW_ANY);
+                ShellExecuteW(None, w!("open"), &HSTRING::from(REPO), None, None, SW_SHOWNORMAL);
+            }
         }
     }
 
@@ -148,7 +160,7 @@ impl App {
         }
 
         // Footer: page dots (the current one stretches into a pill), Skip, Next / Get started.
-        let (next, skip, cy) = Self::footer(l);
+        let (next, skip, star, cy) = Self::footer(l);
         // Seven pages: smaller dots so the row fits between Skip and Next.
         let mut dx = l.x + l.w / 2.0 - ((PAGES - 1) as f32 * 10.0 + 15.0) / 2.0;
         for i in 0..PAGES {
@@ -163,6 +175,12 @@ impl App {
         if last < 1.0 {
             br.SetColor(&fg(a * 0.5 * (1.0 - last)));
             text("Skip", &g.f_wbtn, skip);
+        }
+        if last > 0.0 {
+            // Fades in where Skip was; brightens for a moment when clicked.
+            let lit = if self.pressed == Some(B_STAR) { 0.4 * self.press.x } else { 0.0 };
+            br.SetColor(&fg(a * (0.6 + lit) * last));
+            text("★ Star on GitHub", &g.f_wbtn, star);
         }
         let k = press(B_NEXT);
         let (cx, ny) = ((next.left + next.right) / 2.0, (next.top + next.bottom) / 2.0);
