@@ -2,6 +2,12 @@
 
 An Apple-style Dynamic Island for Windows, written in Rust with Direct2D and DirectComposition. It renders only while something animates, so it idles at 0% CPU.
 
+<p align="center"><img src="docs/demo.gif" alt="The island expanding from the compact music pill into the player and back" width="520"></p>
+
+| Player | Control Center | Timer |
+| :---: | :---: | :---: |
+| <img src="docs/player.png" alt="Expanded player with album art, seek bar and lyrics" width="280"> | <img src="docs/control.png" alt="Control Center with Wi-Fi, Bluetooth, mic, sound, brightness, volume and dark mode" width="280"> | <img src="docs/timer.png" alt="Running timer with pause and cancel" width="280"> |
+
 - Now playing with album art, waveform, seek bar and synced lyrics (LRCLIB, opt-in: sends the track name to lrclib.net)
 - Control Center: scroll down on the island for Wi-Fi, Bluetooth, mic, sound, brightness, volume and dark mode
 - Timer, clipboard notices and history, downloads, Focus, Bluetooth headphones, USB plug/unplug
