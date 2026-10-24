@@ -22,6 +22,30 @@ An Apple-style Dynamic Island for Windows, written in Rust with Direct2D and Dir
 
 The exe isn't code-signed, so Windows SmartScreen may warn on first run: click "More info", then "Run anyway".
 
+## Why this one
+
+- **Open source:** MIT licensed, every line is here to read.
+- **No account, no telemetry:** nothing to sign up for, and it doesn't collect or send usage data.
+- **Works offline:** everything runs on your PC. The only network requests are:
+  - an update check against GitHub releases (30 s after launch, then every 6 hours)
+  - the site's icon when you copy a link (just `https://<host>/favicon.ico`; turn off the Link pill to stop it)
+  - synced lyrics from lrclib.net, off by default
+- **Native and small:** Rust with Direct2D, no Electron or browser engine, under 1 MB.
+
+## FAQ
+
+**Does it work with games?**
+Yes. With "Hide in fullscreen" (on by default), the island hides while a fullscreen game or video covers its display, including borderless fullscreen, and comes back when you leave.
+
+**Does it slow my PC?**
+No. It only redraws while something on it moves; otherwise it sleeps. With music playing, the waveform keeps it drawing, which measured 1.5% of a 12-thread CPU and 84 MB of memory.
+
+**How do I uninstall it?**
+Settings > Apps > Installed apps > Dynamic Island > Uninstall. Your settings stay in `%APPDATA%\DynamicIsland` in case you reinstall; delete that folder to remove them too.
+
+**Why does Windows warn me when I run the installer?**
+The installer isn't code-signed, which costs money every year. Click "More info", then "Run anyway". The source and the build steps are below if you'd rather build it yourself.
+
 ## Build
 
 ```
