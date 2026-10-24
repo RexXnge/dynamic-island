@@ -14,14 +14,20 @@ mod picker;
 mod system;
 mod welcome;
 mod timer;
+mod updater;
+mod usb;
+mod control;
 
 use media::{Cmd, Media, Shared, ART, WM_MEDIA};
 use timer::{Timer, View, WheelDrag, T_DONE, T_TICK};
 use extras::{FAV, WM_BRIGHT, WM_FAVICON, WM_FOCUS};
 use buds::WM_BUDS;
+use usb::WM_USB;
+use control::WM_RADIO;
 use lyrics::WM_LYRICS;
 use shelf::{WM_SHELF_ADD, WM_SHELF_HOVER};
 use picker::WM_PICK;
+use updater::{T_UPDATE, WM_UPDATE};
 use system::WM_FULLSCREEN;
 use config::*;
 use settings::{accent, bg, fg, fg_rgb, surface, surface_rgb, SetUi};
@@ -36,8 +42,8 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Direct3D::*;
-use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::DirectComposition::*;
+use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -109,13 +115,15 @@ enum Note {
     Focus(bool),
     Download,
     Buds(Option<u8>), // battery %
+    Usb(bool),        // plugged in (false: pulled out)
     Pick,             // colour picker: live swatch under the cursor
+    Update,           // a newer release is available (src/updater.rs)
 }
 const ORANGE: (f32, f32, f32) = (1.0, 0.62, 0.04); // iOS system orange
 const GREEN: (f32, f32, f32) = (0.2, 0.84, 0.29);
 
 /// Critically-tunable spring; response in seconds, damping ratio <1 bounces.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Spring {
     x: f32,
     v: f32,
@@ -357,7 +365,7 @@ struct App {
     // Timer.
     view: View,
     xd: [Spring; 3], // expanded (w, h, r) for the current view
-    va: [Spring; 8], // per-view content opacity, indexed by View
+    va: [Spring; 9], // per-view content opacity, indexed by View
     wpage: Spring,   // welcome page, fractional while turning
     w_t0: f32,       // when the current welcome page came in, in `t` seconds
     // File shelf.
@@ -377,6 +385,9 @@ struct App {
     lyric_in: Spring,
     ly_c: Spring, // compact pill's lyric row, 0 -> 1
     hidden: bool, // out of the way of a fullscreen app
+    update: Option<updater::Update>, // newer release found, not installed yet
+    updating: bool,                  // its installer is downloading
+    cc: control::Cc,                 // Control Center state
     clock_min: std::cell::Cell<u16>, // minute the top-row clock last drew, so a new one redraws
     shown: Spring, // 0 hidden -> 1 shown: the whole island pops in or shrinks away
     scaled: bool,  // the composition visual still carries a show/hide transform
@@ -429,6 +440,7 @@ fn main() -> Result<()> {
         watch_mic_use(hwnd);
         downloads::watch(hwnd);
         buds::watch(hwnd);
+        usb::watch(hwnd);
         let (vol_level, muted) = endpoint.as_ref().map_or((0.0, false), |(v, _)| {
             (v.GetMasterVolumeLevelScalar().unwrap_or(0.0), v.GetMute().is_ok_and(|m| m.as_bool()))
         });
@@ -496,7 +508,7 @@ fn main() -> Result<()> {
                 rgn: (0, 0, 0, 0),
                 view: View::Player,
                 xd: [spring(EXPANDED.0), spring(EXPANDED.1), spring(EXPANDED.2)],
-                va: [spring(1.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0)],
+                va: [spring(1.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0)],
                 wpage: spring(0.0),
                 w_t0: 0.0,
                 shelf: Vec::new(),
@@ -513,6 +525,9 @@ fn main() -> Result<()> {
                 lyric_in: spring(1.0),
                 ly_c: spring(0.0),
                 hidden: false,
+                update: None,
+                updating: false,
+                cc: Default::default(),
                 clock_min: std::cell::Cell::new(u16::MAX),
                 shown: Spring { x: 0.0, v: 0.0, to: 1.0 }, // pops in on launch
                 scaled: false,
@@ -526,6 +541,7 @@ fn main() -> Result<()> {
         let _ = AddClipboardFormatListener(hwnd);
         let _ = shelf::register(hwnd);
         system::watch_fullscreen(hwnd);
+        APP.with(|a| a.borrow().as_ref().map(App::start_update_checks));
         APP.with(|a| a.borrow_mut().as_mut().map(|app| app.on_fullscreen(system::fullscreen_now(hwnd))));
         if APP.with(|a| a.borrow().as_ref().is_some_and(|app| !app.hidden)) {
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -831,6 +847,7 @@ impl App {
             || [self.shelf_drop, self.calc_copied, self.lyric_in, self.ly_c].iter().any(|s| !s.settled())
             || self.fx_busy()
             || self.welcome_busy()
+            || self.control_busy()
             || (self.expand.x > 0.5 && clock().1 != self.clock_min.get())
     }
 
@@ -922,24 +939,14 @@ impl App {
         }
     }
 
-    /// Mouse wheel over the island steps monitor brightness and shows it in the level pill.
-    fn bright_step(&mut self, notches: f32) {
-        let Some(level) = self.bright_level else { return };
-        if self.vsl.drag || !self.cfg.pills[P_BRIGHT] {
-            return;
-        }
-        let level = clamp01(level + 0.05 * notches);
-        self.bright_level = Some(level);
-        let _ = self.ddc.send(level);
-        self.bright = true;
-        self.show_level();
-    }
-
     fn on_volume(&mut self, level: f32, muted: bool) {
-        if !self.vsl.drag {
+        if !self.vsl.drag && self.cc.drag != Some(1) {
             self.vol_level = level; // our own drag already set it; don't fight the pointer
         }
         self.muted = muted;
+        if self.control_open() {
+            return; // Control Center's own slider shows it
+        }
         if self.vsl.drag && self.bright {
             return; // keep the brightness pill under the pointer
         }
@@ -962,7 +969,7 @@ impl App {
     }
 
     fn release(&mut self) {
-        if self.settings_release() || self.shelf_release() || self.wheel_release() {
+        if self.settings_release() || self.shelf_release() || self.wheel_release() || self.control_release() {
             return;
         }
         if self.dl_press.take().is_some() {
@@ -1111,6 +1118,7 @@ impl App {
         self.lyrics_step(dt);
         self.fx_step(dt);
         self.welcome_step(dt);
+        self.control_step(dt);
         // Appear: pop with a little overshoot. Hide: quick and calm, it's in a game's way.
         let (resp, damp) = if self.shown.to > 0.5 { (0.42, 0.7) } else { (0.26, 1.0) };
         self.shown.step(dt, resp, damp);
@@ -1332,6 +1340,12 @@ impl App {
                 dc.PopAxisAlignedClip();
             }
         }
+        let cca = self.big_alpha(&l) * self.va[View::Control as usize].x;
+        if cca > 0.0 {
+            dc.PushAxisAlignedClip(&rect(l.x, l.y, l.w, l.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            self.draw_control(&l, cca);
+            dc.PopAxisAlignedClip();
+        }
         let wa = self.big_alpha(&l) * self.va[View::Welcome as usize].x;
         if wa > 0.0 {
             dc.PushAxisAlignedClip(&rect(l.x, l.y, l.w, l.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
@@ -1385,10 +1399,12 @@ impl App {
             let (ccx, ccy) = (l.x + 6.0 + 12.0, l.y + l.h / 2.0);
             if matches!(self.note, Note::Focus(_)) {
                 self.moon(ccx, ccy, k, ca);
-            } else if self.note == Note::Download {
+            } else if self.note == Note::Download || self.note == Note::Update {
                 self.download_icon(ccx, ccy, k, ca);
             } else if matches!(self.note, Note::Buds(_)) {
                 self.headphones(ccx, ccy, k, ca);
+            } else if let Note::Usb(on) = self.note {
+                self.usb_icon(ccx, ccy, k, ca, on, ca);
             } else if self.note == Note::Pick {
                 self.top_icon(B_PICK, ccx, ccy, 1.35 * k, ca);
             } else if self.link.is_some() {
@@ -1473,7 +1489,9 @@ impl App {
                 Note::Focus(_) => ("Focus", &self.clip_text),
                 Note::Download => (if self.dl.as_ref().is_some_and(|d| d.done) { "Downloaded" } else { "Downloading" }, &self.clip_text),
                 Note::Buds(_) => (&self.clip_text, "Connected"),
+                Note::Usb(on) => (&self.clip_text, if on { "Plugged in" } else { "Unplugged" }),
                 Note::Pick => ("Pick a colour", &self.clip_text),
+                Note::Update => (if self.updating { "Updating" } else { "Update available" }, &self.clip_text),
             };
             let has_preview = !sub.is_empty();
             br.SetColor(&fg(ca));
@@ -1769,9 +1787,10 @@ impl App {
         let above = |k: u8| k != kind && self.cfg.rank_of(k) < r;
         let note = match self.note {
             Note::Copy | Note::Pick => K_COPIED,
+            Note::Update => K_DOWNLOADS,
             Note::Focus(_) => K_FOCUS,
             Note::Download => K_DOWNLOADS,
-            Note::Buds(_) => K_EARBUDS,
+            Note::Buds(_) | Note::Usb(_) => K_EARBUDS,
         };
         !((self.clip.to > 0.5 && above(note))
             || (self.vol.to > 0.5 && above(K_VOLUME))
@@ -1816,18 +1835,23 @@ impl App {
         match self.note {
             Note::Copy => self.shot.is_some() || self.link.is_some(),
             Note::Download => self.dl.as_ref().is_some_and(|d| d.done),
+            Note::Update => self.update.is_some(),
             _ => false,
         }
     }
 
     /// Shows a non-clipboard notice; `ms` None keeps it up until told otherwise.
     fn notice(&mut self, note: Note, text: String, ms: Option<u32>) {
+        if self.control_open() {
+            return; // don't swap Control Center out from under the pointer
+        }
         let (kind, pill) = match note {
             Note::Copy => (K_COPIED, P_COPIED),
             Note::Focus(_) => (K_FOCUS, P_FOCUS),
             Note::Download => (K_DOWNLOADS, P_DOWNLOADS),
-            Note::Buds(_) => (K_EARBUDS, P_EARBUDS),
+            Note::Buds(_) | Note::Usb(_) => (K_EARBUDS, P_EARBUDS), // "Devices" pill
             Note::Pick => (K_COPIED, P_COPIED),
+            Note::Update => (K_DOWNLOADS, P_DOWNLOADS),
         };
         if !self.cfg.pills[pill] || !self.may_show(kind) {
             return;
@@ -1888,6 +1912,13 @@ impl App {
         unsafe { SetTimer(self.hwnd, T_DL, 500, None) };
     }
 
+    fn on_usb(&mut self, plugged: bool, name: String) {
+        self.notice(Note::Usb(plugged), name, Some(CLIP_MS));
+        if plugged {
+            self.bump.v = 20.0;
+        }
+    }
+
     fn on_buds(&mut self, name: String, battery: Option<u8>) {
         self.notice(Note::Buds(battery), name, Some(SHOT_MS));
         self.bump.v = 20.0;
@@ -1926,6 +1957,9 @@ impl App {
             return;
         }
         if self.clip.to > 0.5 && self.clickable() {
+            if self.note == Note::Update {
+                return self.run_update();
+            }
             if self.note == Note::Download {
                 self.dl_press = Some((x, y)); // decided on release (open) or on move (drag out)
                 unsafe { SetCapture(self.hwnd) };
@@ -1955,18 +1989,16 @@ impl App {
         if self.view == View::Welcome {
             return self.welcome_click(x, y);
         }
+        if self.view == View::Control {
+            return self.control_click(x, y);
+        }
         if self.expanded_alpha(&l).0 > 0.5 {
             for (id, cx, cy) in self.top_buttons(&l) {
                 if (x - cx).hypot(y - cy) < 13.0 {
                     self.pressed = Some(id);
                     self.press = Spring { x: 1.0, v: 0.0, to: 0.0 };
                     match id {
-                        B_MIC => {
-                            self.mic_muted = !self.mic_muted; // optimistic; the endpoint callback confirms
-                            if let Some((m, _)) = &self.mic {
-                                let _ = unsafe { m.SetMute(self.mic_muted, std::ptr::null()) };
-                            }
-                        }
+                        B_MIC => self.toggle_mic(),
                         B_TIMER => self.set_view(if self.timer.is_some() { View::Run } else { View::Pick }),
                         // Toggles between the list and the player (or stays when nothing plays).
                         B_CLIPS => self.set_view(if self.view == View::Clips && self.media.is_some() { View::Player } else { View::Clips }),
@@ -2071,6 +2103,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 return None;
             }
             WM_PICK => app.on_pick(wp.0, lp.0 as u32),
+            WM_UPDATE => app.on_update(wp.0, lp.0),
+            WM_RADIO => app.on_radio(wp.0),
+            WM_USB => app.on_usb(wp.0 == 1, *Box::from_raw(lp.0 as *mut String)),
             WM_BUDS => {
                 let (name, battery) = *Box::from_raw(lp.0 as *mut (String, Option<u8>));
                 app.on_buds(name, battery);
@@ -2116,15 +2151,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 app.wheel_move(y);
                 app.settings_move(x, y);
+                app.control_move(x, y);
             }
             WM_MOUSEWHEEL => {
                 let mut pt = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
                 let _ = ScreenToClient(hwnd, &mut pt);
                 let notches = ((wp.0 >> 16) & 0xffff) as i16 as f32 / 120.0;
+                let (x, y) = (pt.x as f32 / s, pt.y as f32 / s);
                 if app.view == View::Pick && app.expand.x > 0.5 {
-                    app.wheel_scroll(pt.x as f32 / s, pt.y as f32 / s, notches);
-                } else {
-                    app.bright_step(notches);
+                    app.wheel_scroll(x, y, notches);
+                } else if app.control_wheel(notches) {
+                } else if notches < 0.0 && app.view != View::Welcome {
+                    app.open_control(); // scroll down: Control Center, like pulling it down on iOS
                 }
             }
             WM_MOUSELEAVE => {
@@ -2137,7 +2175,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             WM_TIMER => {
                 let _ = KillTimer(hwnd, wp.0);
-                if wp.0 == T_CLIP {
+                if wp.0 == T_UPDATE {
+                    app.update_tick();
+                } else if wp.0 == T_CLIP {
                     if app.hover && app.clickable() {
                         SetTimer(hwnd, T_CLIP, CLIP_MS, None); // don't vanish from under the pointer
                     } else if app.dl.as_ref().is_some_and(|d| !d.done) {
@@ -2165,7 +2205,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         app.set_view(app.default_view());
                     }
                     app.expand.to = 1.0;
-                } else if wp.0 == T_LEAVE && !app.hover && !app.sl.drag && app.wdrag.is_none() && app.su.drag.is_none() && app.shelf_press.is_none() && app.shelf_drop.to < 0.5
+                } else if wp.0 == T_LEAVE && !app.hover && !app.sl.drag && app.wdrag.is_none() && app.su.drag.is_none() && app.cc.drag.is_none() && app.shelf_press.is_none() && app.shelf_drop.to < 0.5
                     && !(app.view == View::Calc && GetForegroundWindow() == hwnd)
                     && app.view != View::Welcome // the tour closes with its own buttons
                 {

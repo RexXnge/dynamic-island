@@ -605,6 +605,14 @@ pub fn set_theme(c: [[f32; 3]; 3]) {
     THEME.with(|t| t.set(c));
 }
 
+/// Runs `f` with text and island colours swapped: glyphs drawn on a text-coloured fill.
+pub fn swap_fg_bg(f: impl FnOnce()) {
+    let c = theme();
+    THEME.with(|t| t.set([c[1], c[0], c[2]]));
+    f();
+    THEME.with(|t| t.set(c));
+}
+
 fn theme() -> [[f32; 3]; 3] {
     THEME.with(|t| t.get())
 }

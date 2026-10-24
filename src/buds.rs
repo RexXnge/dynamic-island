@@ -22,12 +22,12 @@ struct Dev {
     container: Option<GUID>,
 }
 
-fn prop<T>(props: &windows::Foundation::Collections::IMapView<HSTRING, IInspectable>, key: &str, get: impl Fn(&IPropertyValue) -> Result<T>) -> Option<T> {
+pub fn prop<T>(props: &windows::Foundation::Collections::IMapView<HSTRING, IInspectable>, key: &str, get: impl Fn(&IPropertyValue) -> Result<T>) -> Option<T> {
     let v = props.Lookup(&HSTRING::from(key)).ok()?;
     get(&v.cast::<IPropertyValue>().ok()?).ok()
 }
 
-fn props(keys: &[&str]) -> Result<IIterable<HSTRING>> {
+pub fn props(keys: &[&str]) -> Result<IIterable<HSTRING>> {
     keys.iter().map(|k| HSTRING::from(*k)).collect::<Vec<_>>().try_into()
 }
 

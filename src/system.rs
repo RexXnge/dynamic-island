@@ -57,6 +57,7 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, obj
 /// Hooks run on this thread's message loop; no polling.
 pub unsafe fn watch_fullscreen(island: HWND) {
     ISLAND.store(island.0 as isize, Ordering::Relaxed);
+    LAST.store(fullscreen_now(island), Ordering::Relaxed); // started behind a fullscreen app: its exit must count as a change
     let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
     for e in [EVENT_SYSTEM_FOREGROUND, EVENT_OBJECT_LOCATIONCHANGE] {
         SetWinEventHook(e, e, None, Some(on_event), 0, 0, flags);

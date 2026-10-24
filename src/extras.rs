@@ -231,6 +231,23 @@ impl App {
         }
     }
 
+    /// USB plug, pointing up. `plugged`: slides up into place; pulled out: drops away.
+    pub unsafe fn usb_icon(&self, cx: f32, cy: f32, k: f32, a: f32, plugged: bool, t: f32) {
+        let (dc, br, caps) = (&self.g.dc, &self.g.brush, &self.g.caps);
+        let dy = if plugged { 3.0 * (1.0 - t) } else { -3.0 * (1.0 - t) };
+        let p = |x: f32, y: f32| D2D_POINT_2F { x: cx + (x - 12.0) * k, y: cy + (y - 12.0 + dy) * k };
+        let rr = |x: f32, y: f32, w: f32, h: f32, r: f32| {
+            let o = p(x, y);
+            rrect(o.x, o.y, w * k, h * k, r * k)
+        };
+        br.SetColor(&fg(a));
+        dc.DrawRoundedRectangle(&rr(8.5, 3.0, 7.0, 6.5, 0.8), br, 1.5 * k, None); // metal tip
+        dc.FillRectangle(&rect(p(10.0, 5.0).x, p(10.0, 5.0).y, 1.4 * k, 1.4 * k), br);
+        dc.FillRectangle(&rect(p(12.6, 5.0).x, p(12.6, 5.0).y, 1.4 * k, 1.4 * k), br);
+        dc.FillRoundedRectangle(&rr(7.0, 9.5, 10.0, 8.0, 2.2), br); // grip
+        dc.DrawLine(p(12.0, 17.5), p(12.0, 21.5), br, 1.8 * k, caps); // cable
+    }
+
     /// Down arrow in a ring: the ring spins in quarter turns while downloading, closes when done.
     pub unsafe fn download_icon(&self, cx: f32, cy: f32, k: f32, a: f32) {
         let (dc, br, caps) = (&self.g.dc, &self.g.brush, &self.g.caps);

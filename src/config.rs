@@ -17,7 +17,7 @@ pub const CUSTOM: usize = 5;
 pub const MUSIC_MODES: [&str; 4] = ["All apps", "Spotify", "No browsers", "Choose"];
 
 /// Pill switches, in the order the Pills page lists them.
-pub const PILLS: [&str; 12] = ["Music", "Timer", "Copied", "Screenshot", "Colour", "Link", "Volume", "Brightness", "Focus", "Downloads", "Earbuds", "Lyrics"];
+pub const PILLS: [&str; 12] = ["Music", "Timer", "Copied", "Screenshot", "Colour", "Link", "Volume", "Brightness", "Focus", "Downloads", "Devices", "Lyrics"];
 pub const P_MUSIC: usize = 0;
 pub const P_TIMER: usize = 1;
 pub const P_COPIED: usize = 2;
@@ -25,6 +25,7 @@ pub const P_SHOT: usize = 3;
 pub const P_COLOUR: usize = 4;
 pub const P_LINK: usize = 5;
 pub const P_VOLUME: usize = 6;
+#[allow(dead_code)] // the wheel no longer sets brightness; kept so saved pill indices stay put
 pub const P_BRIGHT: usize = 7;
 pub const P_FOCUS: usize = 8;
 pub const P_DOWNLOADS: usize = 9;
