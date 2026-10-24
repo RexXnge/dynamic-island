@@ -8,6 +8,8 @@ An Apple-style Dynamic Island for Windows, written in Rust with Direct2D and Dir
 | :---: | :---: | :---: |
 | <img src="docs/player.png" alt="Expanded player with album art, seek bar and lyrics" width="280"> | <img src="docs/control.png" alt="Control Center with Wi-Fi, Bluetooth, mic, sound, brightness, volume and dark mode" width="280"> | <img src="docs/timer.png" alt="Running timer with pause and cancel" width="280"> |
 
+<p align="center"><img src="docs/stats.png" alt="1.5% CPU while music plays, 84 MB memory, 0.8 MB app, 2.4 MB installer" width="760"></p>
+
 - Now playing with album art, waveform, seek bar and synced lyrics (LRCLIB, opt-in: sends the track name to lrclib.net)
 - Control Center: scroll down on the island for Wi-Fi, Bluetooth, mic, sound, brightness, volume and dark mode
 - Timer, clipboard notices and history, downloads, Focus, Bluetooth headphones, USB plug/unplug
