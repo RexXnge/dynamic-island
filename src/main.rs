@@ -19,6 +19,7 @@ mod usb;
 mod control;
 mod mixer;
 mod ai;
+mod calendar;
 
 use media::{Cmd, Media, Shared, ART, WM_MEDIA};
 use timer::{Timer, View, WheelDrag, T_DONE, T_TICK};
@@ -374,7 +375,7 @@ struct App {
     // Timer.
     view: View,
     xd: [Spring; 3], // expanded (w, h, r) for the current view
-    va: [Spring; 11], // per-view content opacity, indexed by View
+    va: [Spring; 12], // per-view content opacity, indexed by View
     wpage: Spring,   // welcome page, fractional while turning
     w_t0: f32,       // when the current welcome page came in, in `t` seconds
     // File shelf.
@@ -399,6 +400,7 @@ struct App {
     cc: control::Cc,                 // Control Center state
     mx: mixer::Mixer,                // Sound Mixer rows
     ai: ai::Ai,                      // AI chat
+    cal: calendar::Cal,              // month the calendar shows
     clock_min: std::cell::Cell<u16>, // minute the top-row clock last drew, so a new one redraws
     shown: Spring, // 0 hidden -> 1 shown: the whole island pops in or shrinks away
     scaled: bool,  // the composition visual still carries a show/hide transform
@@ -519,7 +521,7 @@ fn main() -> Result<()> {
                 rgn: (0, 0, 0, 0),
                 view: View::Player,
                 xd: [spring(EXPANDED.0), spring(EXPANDED.1), spring(EXPANDED.2)],
-                va: [spring(1.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0)],
+                va: [spring(1.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0)],
                 wpage: spring(0.0),
                 w_t0: 0.0,
                 shelf: Vec::new(),
@@ -541,6 +543,7 @@ fn main() -> Result<()> {
                 cc: Default::default(),
                 mx: Default::default(),
                 ai: Default::default(),
+                cal: Default::default(),
                 clock_min: std::cell::Cell::new(u16::MAX),
                 shown: Spring { x: 0.0, v: 0.0, to: 1.0 }, // pops in on launch
                 scaled: false,
@@ -1443,6 +1446,12 @@ impl App {
             self.draw_ai(&l, aa);
             dc.PopAxisAlignedClip();
         }
+        let cla = self.big_alpha(&l) * self.va[View::Calendar as usize].x;
+        if cla > 0.0 {
+            dc.PushAxisAlignedClip(&rect(l.x, l.y, l.w, l.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            self.draw_calendar(&l, cla);
+            dc.PopAxisAlignedClip();
+        }
         let wa = self.big_alpha(&l) * self.va[View::Welcome as usize].x;
         if wa > 0.0 {
             dc.PushAxisAlignedClip(&rect(l.x, l.y, l.w, l.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
@@ -1751,7 +1760,8 @@ impl App {
         let calc = big * self.va[View::Calc as usize].x;
         let mixer = big * self.va[View::Mixer as usize].x;
         let ai = big * self.va[View::Ai as usize].x;
-        (big * player + clips + set + shelf + calc + mixer + ai, clips, set, shelf, calc)
+        let cal = big * self.va[View::Calendar as usize].x;
+        (big * player + clips + set + shelf + calc + mixer + ai + cal, clips, set, shelf, calc)
     }
 
     /// Opacity of expanded-only content: late in the expansion, and out of a notice's way.
@@ -2243,8 +2253,12 @@ impl App {
                 }
                 return;
             }
+            // The clock in the middle of the row opens the calendar.
+            if (x - (l.x + l.w / 2.0)).abs() < 36.0 && (y - (l.y + 20.0)).abs() < 13.0 {
+                return if self.view == View::Calendar { self.set_view(self.default_view()) } else { self.open_calendar() };
+            }
         }
-        if self.ai_click(x, y) || self.mixer_click(x, y) || self.settings_click(x, y) || self.clips_click(x, y) || self.shelf_click(x, y) || self.view == View::Calc || self.timer_click(x, y) || self.media.is_none() {
+        if self.calendar_click(x, y) || self.ai_click(x, y) || self.mixer_click(x, y) || self.settings_click(x, y) || self.clips_click(x, y) || self.shelf_click(x, y) || self.view == View::Calc || self.timer_click(x, y) || self.media.is_none() {
             return;
         }
         if self.slider_hit(x, y) {
@@ -2327,7 +2341,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             WM_UPDATE => app.on_update(wp.0, lp.0),
             WM_RADIO => app.on_radio(wp.0),
             WM_AI => {
-                let (path, answer) = *Box::from_raw(lp.0 as *mut (std::path::PathBuf, std::result::Result<String, String>));
+                let (path, answer) = *Box::from_raw(lp.0 as *mut (std::path::PathBuf, std::result::Result<ai::Reply, String>));
                 app.on_ai(path, answer);
             }
             WM_USB => app.on_usb(wp.0 == 1, *Box::from_raw(lp.0 as *mut String)),
@@ -2390,6 +2404,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     app.wheel_scroll(x, y, notches);
                 } else if app.view == View::Ai && app.expand.to > 0.5 {
                     app.ai_scroll(notches);
+                } else if app.calendar_wheel(notches) {
                 } else if app.control_wheel(notches) {
                 } else if notches < 0.0 && app.view != View::Welcome {
                     app.open_control(); // scroll down: Control Center, like pulling it down on iOS

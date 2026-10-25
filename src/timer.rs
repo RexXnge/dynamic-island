@@ -16,6 +16,7 @@ pub enum View {
     Control,  // src/control.rs
     Mixer,    // src/mixer.rs
     Ai,       // src/ai.rs
+    Calendar, // src/calendar.rs
 }
 
 pub const PICK: (f32, f32, f32) = (WIDE, 214.0, 42.0);
@@ -92,6 +93,7 @@ impl App {
             View::Control => control::CONTROL,
             View::Mixer => self.mixer_size(),
             View::Ai => ai::AI,
+            View::Calendar => self.calendar_size(),
         };
         self.xd[0].to = d.0;
         self.xd[1].to = d.1;
@@ -137,13 +139,18 @@ impl App {
     }
 
     fn start_timer(&mut self, total: f64) {
+        self.run_timer(total);
+        self.set_view(View::Run);
+    }
+
+    /// Starts a countdown without changing the view (the AI starts one while its chat stays open).
+    pub fn run_timer(&mut self, total: f64) {
         self.timer = Some(Timer { total, end: Instant::now() + Duration::from_secs_f64(total), paused: None, done: false });
         unsafe {
             let _ = KillTimer(self.hwnd, T_DONE);
             let _ = PlaySoundW(PCWSTR::null(), HMODULE::default(), SND_FLAGS(0)); // stop a ringing alarm
         }
         self.presence();
-        self.set_view(View::Run);
         self.tick();
     }
 
@@ -269,7 +276,7 @@ impl App {
         let l = self.layout();
         let hit = |(cx, cy): (f32, f32)| (x - cx).hypot(y - cy) < 25.0;
         match self.view {
-            View::Player | View::Clips | View::Settings | View::Shelf | View::Calc | View::Welcome | View::Control | View::Mixer | View::Ai => return false,
+            View::Player | View::Clips | View::Settings | View::Shelf | View::Calc | View::Welcome | View::Control | View::Mixer | View::Ai | View::Calendar => return false,
             View::Pick => {
                 let [cancel, start] = Self::pick_buttons(&l);
                 if hit(cancel) {

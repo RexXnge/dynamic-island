@@ -1,6 +1,8 @@
 // AI chat over Groq's free API. The key is pasted once and kept encrypted for this Windows user
 // (DPAPI) in %APPDATA%\DynamicIsland\ai\key. Chats are JSON files in ai\chats on this PC only;
 // the one thing that leaves the machine is the conversation sent to Groq to get each answer.
+// The AI can also start a timer, open an app or open a file; each one waits for a click on Allow,
+// and app and file lookups happen on this PC (only the name the user asked for goes to Groq).
 use super::*;
 use std::path::{Path, PathBuf};
 use windows::Data::Json::{JsonArray, JsonObject, JsonValue};
@@ -8,8 +10,12 @@ use windows::Foundation::Uri;
 use windows::Storage::Streams::UnicodeEncoding;
 use windows::Web::Http::{HttpClient, HttpMethod, HttpRequestMessage, HttpStringContent};
 use windows::Win32::Security::Cryptography::{CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB};
+use windows::Win32::UI::Shell::{
+    BHID_EnumItems, IEnumShellItems, IShellItem, SHGetKnownFolderItem, SHGetKnownFolderPath, FOLDERID_AppsFolder, FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music,
+    FOLDERID_Pictures, FOLDERID_Videos, KF_FLAG_DEFAULT, SIGDN, SIGDN_NORMALDISPLAY, SIGDN_PARENTRELATIVEPARSING,
+};
 
-pub const WM_AI: u32 = 0x8013; // lparam = Box<(PathBuf chat file, Result<String answer, String error>)>
+pub const WM_AI: u32 = 0x8013; // lparam = Box<(PathBuf chat file, Result<Reply, String error>)>
 pub const AI: (f32, f32, f32) = (WIDE, 290.0, 36.0);
 const URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 const MODELS_URL: &str = "https://api.groq.com/openai/v1/models";
@@ -18,7 +24,14 @@ const MODELS_URL: &str = "https://api.groq.com/openai/v1/models";
 const PREFERRED: [&str; 4] = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "openai/gpt-oss-20b", "llama-3.1-8b-instant"];
 /// The model picked from Groq's list, kept for the rest of the run.
 static MODEL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-const SYSTEM: &str = "You are a helpful assistant inside a small Dynamic Island at the top of the user's Windows desktop. Answer briefly, in plain text without markdown.";
+const SYSTEM: &str = "You are a helpful assistant inside a small Dynamic Island at the top of the user's Windows desktop. Answer briefly, in plain text without markdown. \
+You can start a timer, open an installed app, or find and open one of the user's files with the tools; the island asks the user before doing it, so just call the tool.";
+const TOOLS: &str = r#"[
+{"type":"function","function":{"name":"start_timer","description":"Start a countdown timer in the island.","parameters":{"type":"object","properties":{"minutes":{"type":"number","description":"Length in minutes, fractions allowed"}},"required":["minutes"]}}},
+{"type":"function","function":{"name":"open_app","description":"Open an installed app, e.g. Spotify, Notepad or Settings.","parameters":{"type":"object","properties":{"name":{"type":"string","description":"The app's name"}},"required":["name"]}}},
+{"type":"function","function":{"name":"open_file","description":"Find a file or folder in the user's Desktop, Documents, Downloads, Pictures, Music or Videos by part of its name, and open it.","parameters":{"type":"object","properties":{"name":{"type":"string","description":"Part of the file or folder name"}},"required":["name"]}}}
+]"#;
+const CARD_H: f32 = 46.0; // the Allow / Cancel card above the input line
 const KEYS_URL: &str = "https://console.groq.com/keys";
 const MAX_INPUT: usize = 2000;
 const HEAD_Y: f32 = 48.0; // header row centre: model name, New chat, Change key
@@ -36,6 +49,180 @@ pub struct Ai {
     waiting: bool,
     error: Option<String>,
     scroll: f32, // DIPs scrolled up from the newest message
+    pending: Option<Action>, // waiting for Allow or Cancel
+}
+
+/// What came back for a message: an answer, or something to do once the user allows it.
+pub enum Reply {
+    Text(String),
+    Ask(Action),
+}
+
+pub enum Action {
+    Timer(u32), // seconds
+    Open { label: String, detail: String, target: String }, // target goes to ShellExecute
+}
+
+impl Action {
+    fn question(&self) -> String {
+        match self {
+            Action::Timer(s) => format!("Start a {} timer?", span(*s)),
+            Action::Open { label, .. } => format!("Open {}?", short(label, 30)),
+        }
+    }
+    fn detail(&self) -> String {
+        match self {
+            Action::Timer(_) => "Counts down in the island".into(),
+            Action::Open { detail, .. } => short(detail, 44),
+        }
+    }
+    fn verb(&self) -> &'static str {
+        match self {
+            Action::Timer(_) => "Start",
+            Action::Open { .. } => "Open",
+        }
+    }
+}
+
+fn short(s: &str, n: usize) -> String {
+    if s.chars().count() <= n { s.into() } else { format!("{}…", s.chars().take(n - 1).collect::<String>()) }
+}
+
+/// "45 sec", "5 min", "1 h 30 min".
+fn span(secs: u32) -> String {
+    match (secs / 3600, secs / 60 % 60, secs % 60) {
+        (0, 0, s) => format!("{s} sec"),
+        (0, m, 0) => format!("{m} min"),
+        (0, m, s) => format!("{m} min {s} sec"),
+        (h, 0, _) => format!("{h} h"),
+        (h, m, _) => format!("{h} h {m} min"),
+    }
+}
+
+unsafe fn shell_name(item: &IShellItem, kind: SIGDN) -> Option<String> {
+    let p = item.GetDisplayName(kind).ok()?;
+    let s = p.to_string().ok();
+    CoTaskMemFree(Some(p.0 as _));
+    s
+}
+
+/// How well `name` answers `q` (both lowercase): exact, then prefix, then anywhere.
+fn rank(name: &str, q: &str) -> Option<u8> {
+    if name == q {
+        Some(0)
+    } else if name.starts_with(q) {
+        Some(1)
+    } else {
+        name.contains(q).then_some(2)
+    }
+}
+
+/// The Start menu's app (desktop or Store) that best matches `q`: (its name, what to open).
+unsafe fn find_app(q: &str) -> Option<(String, String)> {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return None;
+    }
+    let folder: IShellItem = SHGetKnownFolderItem(&FOLDERID_AppsFolder, KF_FLAG_DEFAULT, HANDLE::default()).ok()?;
+    let items: IEnumShellItems = folder.BindToHandler(None, &BHID_EnumItems).ok()?;
+    let mut best: Option<((u8, usize), String, String)> = None;
+    loop {
+        let mut one = [None];
+        let _ = items.Next(&mut one, None);
+        let Some(item) = one[0].take() else { break };
+        let (Some(name), Some(id)) = (shell_name(&item, SIGDN_NORMALDISPLAY), shell_name(&item, SIGDN_PARENTRELATIVEPARSING)) else { continue };
+        let lower = name.to_lowercase();
+        if lower.contains("uninstall") {
+            continue;
+        }
+        // The id (e.g. Microsoft.WindowsNotepad_…!App) finds English names when Windows shows another language.
+        let Some(r) = rank(&lower, &q).or_else(|| id.to_lowercase().contains(&q).then_some(3)) else { continue };
+        if best.as_ref().map_or(true, |(k, ..)| (r, name.len()) < *k) {
+            best = Some(((r, name.len()), name, id));
+        }
+    }
+    best.map(|(_, name, id)| (name, format!("shell:AppsFolder\\{id}")))
+}
+
+unsafe fn known_folder(id: &GUID) -> Option<PathBuf> {
+    let p = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, HANDLE::default()).ok()?;
+    let s = p.to_string().ok();
+    CoTaskMemFree(Some(p.0 as _));
+    s.map(PathBuf::from)
+}
+
+/// The file or folder in the user's own folders that best matches `q`: the best name, then the newest.
+fn find_file(q: &str) -> Option<PathBuf> {
+    let q = q.trim().to_lowercase();
+    if q.chars().count() < 2 {
+        return None;
+    }
+    let roots = [FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Pictures, FOLDERID_Music, FOLDERID_Videos];
+    // Level by level, so files near the top of every folder are seen before deep trees use up the budget.
+    let mut dirs: std::collections::VecDeque<(PathBuf, u32)> = roots.iter().filter_map(|id| unsafe { known_folder(id) }).map(|p| (p, 0)).collect();
+    let mut best: Option<((std::cmp::Reverse<u8>, std::time::SystemTime), PathBuf)> = None;
+    let mut seen = 0;
+    // shortcut: stops after 50,000 entries and 6 levels deep; an index would be needed for more.
+    while let Some((dir, depth)) = dirs.pop_front() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > 50_000 {
+                return best.map(|b| b.1);
+            }
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            if name.starts_with('.') || name == "node_modules" {
+                continue;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() && depth < 6 {
+                dirs.push_back((e.path(), depth + 1)); // junctions report as symlinks, so they aren't followed
+            }
+            let stem = Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let Some(r) = rank(&stem, &q).or_else(|| rank(&name, &q)) else { continue };
+            let key = (std::cmp::Reverse(r), e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH));
+            if best.as_ref().map_or(true, |(k, _)| key > *k) {
+                best = Some((key, e.path()));
+            }
+        }
+    }
+    best.map(|b| b.1)
+}
+
+/// Turns a tool call into what to ask the user (lookups run here, on the worker thread).
+fn act(name: &str, args: Option<JsonObject>) -> Reply {
+    let arg = |k: &str| args.as_ref().and_then(|a| a.GetNamedString(&HSTRING::from(k)).ok()).map(|s| s.to_string().trim().to_string()).unwrap_or_default();
+    match name {
+        "start_timer" => {
+            let min = args.as_ref().and_then(|a| a.GetNamedNumber(h!("minutes")).ok()).unwrap_or(0.0);
+            let secs = (min * 60.0).round();
+            if (1.0..=86_400.0).contains(&secs) {
+                Reply::Ask(Action::Timer(secs as u32))
+            } else {
+                Reply::Text("Timers run from 1 second to 24 hours.".into())
+            }
+        }
+        "open_app" => match unsafe { find_app(&arg("name")) } {
+            Some((label, target)) => Reply::Ask(Action::Open { label, detail: "App".into(), target }),
+            None => Reply::Text(format!("I couldn't find an app called \u{201c}{}\u{201d}.", arg("name"))),
+        },
+        "open_file" => match find_file(&arg("name")) {
+            Some(p) => {
+                let label = p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                let detail = p.parent().map(|d| format!("in {}", d.display())).unwrap_or_default();
+                Reply::Ask(Action::Open { label, detail, target: p.display().to_string() })
+            }
+            None => Reply::Text(format!("I couldn't find a file called \u{201c}{}\u{201d} in your folders.", arg("name"))),
+        },
+        _ => Reply::Text("I can't do that from here.".into()),
+    }
+}
+
+/// The system prompt with today's date and time, so questions about them need no tool.
+fn system_prompt() -> String {
+    let st = unsafe { GetLocalTime() };
+    let date = calendar::date_text(st.wYear as i32, st.wMonth as u32, st.wDay as u32, "dddd d MMMM yyyy");
+    format!("{SYSTEM} It is now {date}, {}.", clock().0)
 }
 
 fn dir() -> Option<PathBuf> {
@@ -148,21 +335,31 @@ fn list_models(key: &str) -> Result<std::result::Result<Vec<String>, String>> {
 }
 
 /// One chat completion. Err carries a message fit to show (Groq's own error text when it sends one).
-fn complete(key: &str, chat: &[(bool, String)]) -> std::result::Result<String, String> {
-    let ask = |model: &str| -> Result<std::result::Result<String, String>> {
+fn complete(key: &str, chat: &[(bool, String)]) -> std::result::Result<Reply, String> {
+    let ask = |model: &str| -> Result<std::result::Result<Reply, String>> {
         let msgs = to_json(chat)?;
-        msgs.InsertAt(0, &message("system", SYSTEM)?)?;
+        msgs.InsertAt(0, &message("system", &system_prompt())?)?;
         let body = JsonObject::new()?;
         body.SetNamedValue(h!("model"), &JsonValue::CreateStringValue(&HSTRING::from(model))?)?;
         body.SetNamedValue(h!("messages"), &msgs)?;
+        body.SetNamedValue(h!("tools"), &JsonArray::Parse(&HSTRING::from(TOOLS))?)?;
         let req = HttpRequestMessage::Create(&HttpMethod::Post()?, &Uri::CreateUri(&HSTRING::from(URL))?)?;
         req.SetContent(&HttpStringContent::CreateFromStringWithEncodingAndMediaType(&body.Stringify()?, UnicodeEncoding::Utf8, h!("application/json"))?)?;
         Ok(match call(key, &req)? {
-            Ok(j) => Ok(j.GetNamedArray(h!("choices"))?.GetObjectAt(0)?.GetNamedObject(h!("message"))?.GetNamedString(h!("content"))?.to_string().trim().to_string()),
+            Ok(j) => {
+                let msg = j.GetNamedArray(h!("choices"))?.GetObjectAt(0)?.GetNamedObject(h!("message"))?;
+                match msg.GetNamedArray(h!("tool_calls")).and_then(|c| c.GetObjectAt(0)) {
+                    Ok(c) => {
+                        let f = c.GetNamedObject(h!("function"))?;
+                        Ok(act(&f.GetNamedString(h!("name"))?.to_string(), f.GetNamedString(h!("arguments")).and_then(|a| JsonObject::Parse(&a)).ok()))
+                    }
+                    Err(_) => Ok(Reply::Text(msg.GetNamedString(h!("content"))?.to_string().trim().to_string())),
+                }
+            }
             Err(e) => Err(e),
         })
     };
-    let run = || -> Result<std::result::Result<String, String>> {
+    let run = || -> Result<std::result::Result<Reply, String>> {
         let mut skip = None;
         for _ in 0..2 {
             let cached = MODEL.lock().unwrap().clone();
@@ -237,6 +434,7 @@ impl App {
         self.ai.chat.push((true, text));
         self.ai.input.clear();
         self.ai.error = None;
+        self.ai.pending = None; // a new message instead of Allow means no
         self.ai.waiting = true;
         self.ai.scroll = 0.0;
         save_chat(&path, &self.ai.chat);
@@ -250,18 +448,23 @@ impl App {
         });
     }
 
-    pub fn on_ai(&mut self, path: PathBuf, answer: std::result::Result<String, String>) {
+    pub fn on_ai(&mut self, path: PathBuf, answer: std::result::Result<Reply, String>) {
         let current = self.ai.file.as_ref() == Some(&path);
         if current {
             self.ai.waiting = false;
         }
         match answer {
-            Ok(text) if current => {
+            Ok(Reply::Ask(a)) if current => {
+                self.ai.pending = Some(a);
+                self.ai.scroll = 0.0;
+            }
+            Ok(Reply::Ask(_)) => {} // that chat was closed; nothing to allow any more
+            Ok(Reply::Text(text)) if current => {
                 self.ai.chat.push((false, text));
                 self.ai.scroll = 0.0;
                 save_chat(&path, &self.ai.chat);
             }
-            Ok(text) => {
+            Ok(Reply::Text(text)) => {
                 // Answer for a chat that's no longer open: it still belongs in that chat's file.
                 let mut chat = load_chat(&path);
                 chat.push((false, text));
@@ -270,6 +473,43 @@ impl App {
             Err(e) if current => self.ai.error = Some(e),
             Err(_) => {}
         }
+    }
+
+    /// Runs (or drops) the action waiting in the card and says what happened in the chat.
+    fn ai_decide(&mut self, allow: bool) {
+        let Some(act) = self.ai.pending.take() else { return };
+        let text = match act {
+            _ if !allow => "Cancelled.".to_string(),
+            Action::Timer(s) => {
+                self.run_timer(s as f64);
+                format!("Started a {} timer.", span(s))
+            }
+            Action::Open { label, target, .. } => {
+                let ok = unsafe {
+                    let _ = AllowSetForegroundWindow(ASFW_ANY);
+                    ShellExecuteW(None, w!("open"), &HSTRING::from(target), None, None, SW_SHOWNORMAL).0 as isize > 32
+                };
+                if ok { format!("Opened {label}.") } else { format!("Couldn't open {label}.") }
+            }
+        };
+        self.ai.chat.push((false, text));
+        self.ai.scroll = 0.0;
+        if let Some(path) = &self.ai.file {
+            save_chat(path, &self.ai.chat);
+        }
+    }
+
+    /// The Allow / Cancel card: (card, allow button, cancel button).
+    fn card(l: &Layout) -> (D2D_RECT_F, D2D_RECT_F, D2D_RECT_F) {
+        let ib = Self::input_box(l);
+        let card = rect(l.x + PAD, ib.top - 8.0 - CARD_H, l.w - 2.0 * PAD, CARD_H);
+        let ok = rect(card.right - 10.0 - 60.0, card.top + 10.0, 60.0, 26.0);
+        (card, ok, rect(ok.left - 6.0 - 64.0, ok.top, 64.0, 26.0))
+    }
+
+    /// Bottom of the messages, above the card while one waits.
+    fn list_bottom(&self, l: &Layout) -> f32 {
+        Self::input_box(l).top - 8.0 - if self.ai.pending.is_some() { CARD_H + 8.0 } else { 0.0 }
     }
 
     pub fn ai_char(&mut self, c: u32) {
@@ -323,7 +563,10 @@ impl App {
         let l = self.layout();
         let inside = |r: &D2D_RECT_F| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
         let (new, key) = Self::header_buttons(&l);
-        if self.ai.key.is_some() && inside(&new) {
+        let (_, ok, no) = Self::card(&l);
+        if self.ai.pending.is_some() && (inside(&ok) || inside(&no)) {
+            self.ai_decide(inside(&ok));
+        } else if self.ai.key.is_some() && inside(&new) {
             if !self.ai.chat.is_empty() {
                 self.ai = Ai { loaded: true, key: self.ai.key.take(), ..Default::default() };
             }
@@ -377,7 +620,7 @@ impl App {
     pub fn ai_scroll(&mut self, notches: f32) {
         let l = self.layout();
         let total: f32 = self.ai_rows(&l).iter().map(|r| r.2 + 10.0).sum();
-        let room = Self::input_box(&l).top - 8.0 - (l.y + LIST_TOP);
+        let room = self.list_bottom(&l) - (l.y + LIST_TOP);
         self.ai.scroll = (self.ai.scroll + notches * 40.0).clamp(0.0, (total - room).max(0.0));
     }
 
@@ -401,7 +644,7 @@ impl App {
                 text(s, &g.f_seg, rect(r.left, r.top + 2.0, r.right - r.left, 16.0));
             }
             // Messages, newest at the bottom; the wheel scrolls back through older ones.
-            let (top, bottom) = (l.y + LIST_TOP, ib.top - 8.0);
+            let (top, bottom) = (l.y + LIST_TOP, self.list_bottom(l));
             dc.PushAxisAlignedClip(&rect(l.x, top, l.w, bottom - top), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
             let mut y = bottom + self.ai.scroll;
             for (user, s, h) in self.ai_rows(l).into_iter().rev() {
@@ -427,9 +670,25 @@ impl App {
             }
             if self.ai.chat.is_empty() && !self.ai.waiting && self.ai.error.is_none() {
                 br.SetColor(&fg(a * 0.4));
-                text("Ask anything. Chats stay on this PC.", &g.f_wbody, rect(x0, top + 40.0, w, 40.0));
+                text("Ask anything, or say \u{201c}open Spotify\u{201d}, \u{201c}timer 5 min\u{201d} or \u{201c}find my CV\u{201d}. Chats stay on this PC.", &g.f_wbody, rect(x0, top + 30.0, w, 50.0));
             }
             dc.PopAxisAlignedClip();
+            if let Some(act) = &self.ai.pending {
+                let (card, ok, no) = Self::card(l);
+                br.SetColor(&fg(a * 0.08));
+                dc.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: card, radiusX: 14.0, radiusY: 14.0 }, br);
+                let tw = no.left - card.left - 20.0;
+                br.SetColor(&fg(a));
+                text(&act.question(), &g.f_title_s, rect(card.left + 12.0, card.top + 7.0, tw, 16.0));
+                br.SetColor(&fg(a * 0.5));
+                text(&act.detail(), &g.f_artist_s, rect(card.left + 12.0, card.top + 25.0, tw, 14.0));
+                for (r, s, primary) in [(no, "Cancel", false), (ok, act.verb(), true)] {
+                    br.SetColor(&fg(a * if primary { 1.0 } else { 0.12 }));
+                    dc.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r, radiusX: 13.0, radiusY: 13.0 }, br);
+                    br.SetColor(&if primary { bg(a) } else { fg(a * 0.85) });
+                    text(s, &g.f_seg, rect(r.left, r.top + 5.0, r.right - r.left, 16.0));
+                }
+            }
         } else {
             br.SetColor(&fg(a));
             text("Connect Groq", &g.f_wtitle, rect(x0, l.y + 64.0, w, 24.0));
@@ -483,5 +742,21 @@ mod tests {
         assert_eq!(pick(&list, Some("openai/gpt-oss-20b")).as_deref(), Some("llama-3.1-8b-instant"));
         assert_eq!(pick(&ids(&["whisper-large-v3", "qwen/qwen3-32b"]), None).as_deref(), Some("qwen/qwen3-32b"));
         assert_eq!(pick(&ids(&["whisper-large-v3"]), None), None);
+    }
+
+    #[test]
+    #[ignore] // reads this PC's Start menu and folders
+    fn finds_apps_and_files_live() {
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        for q in ["notepad", "settings", "spotify", "calc"] {
+            println!("{q}: {:?}", unsafe { find_app(q) });
+        }
+        println!("cargo: {:?}", find_file("cargo"));
+    }
+
+    #[test]
+    fn spans_and_ranks() {
+        assert_eq!((span(45), span(300), span(330), span(3600), span(5400)), ("45 sec".into(), "5 min".into(), "5 min 30 sec".into(), "1 h".into(), "1 h 30 min".into()));
+        assert_eq!((rank("spotify", "spotify"), rank("spotify music", "spotify"), rank("my spotify", "spotify"), rank("notepad", "spotify")), (Some(0), Some(1), Some(2), None));
     }
 }
