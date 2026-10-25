@@ -17,6 +17,8 @@ mod timer;
 mod updater;
 mod usb;
 mod control;
+mod mixer;
+mod ai;
 
 use media::{Cmd, Media, Shared, ART, WM_MEDIA};
 use timer::{Timer, View, WheelDrag, T_DONE, T_TICK};
@@ -24,6 +26,7 @@ use extras::{FAV, WM_BRIGHT, WM_FAVICON, WM_FOCUS};
 use buds::WM_BUDS;
 use usb::WM_USB;
 use control::WM_RADIO;
+use ai::WM_AI;
 use lyrics::WM_LYRICS;
 use shelf::{WM_SHELF_ADD, WM_SHELF_HOVER};
 use picker::WM_PICK;
@@ -56,7 +59,7 @@ use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM
 use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::System::Registry::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
+use windows::Win32::Globalization::{GetDateFormatEx, GetTimeFormatEx, TIME_NOSECONDS};
 use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTimePreciseAsFileTime};
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -64,12 +67,14 @@ use windows::Win32::UI::Shell::{DragQueryFileW, ShellExecuteW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 // Window canvas in DIPs; the island is drawn top-centered inside it.
-const CW: f32 = 380.0;
-const CH: f32 = 290.0; // fits the tallest view (timer picker, settings) at the largest top gap
+const WIDE: f32 = 400.0; // width of every expanded view
+const CW: f32 = WIDE + 40.0;
+const CH: f32 = 330.0; // fits the tallest view (timer picker, settings) at the largest top gap
 // Island sizes (w, h, radius): resting pill, compact music, expanded music.
-const IDLE: (f32, f32, f32) = (100.0, 30.0, 15.0);
+const IDLE: (f32, f32, f32) = (150.0, 40.0, 20.0); // tall enough for the clock and date
 const COMPACT: (f32, f32, f32) = (180.0, 36.0, 18.0);
-const EXPANDED: (f32, f32, f32) = (340.0, 164.0, 40.0);
+const EXPANDED: (f32, f32, f32) = (WIDE, 164.0, 40.0);
+const NOTCH_EAR: f32 = 8.0; // radius of the notch style's outward curves at the screen edge
 const TOPBAR: f32 = 22.0; // expanded view's icon row (timer, mic, settings) above the player
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -99,6 +104,8 @@ const B_SHELF: usize = 11;
 const B_CALC: usize = 12;
 const B_POWER: usize = 13;
 const B_PICK: usize = 14; // colour picker
+const B_MIXER: usize = 15; // Sound Mixer
+const B_AI: usize = 16;
 // State fades in `App::fx`: things that used to pop in or out now ease.
 const FX_MIC: usize = 0; // recording dot
 const FX_MOON: usize = 1; // Focus moon on the resting pill
@@ -294,6 +301,8 @@ struct Gfx {
     f_wbody: IDWriteTextFormat,  // welcome page text, wraps
     f_wbtn: IDWriteTextFormat,   // welcome buttons and subtitle, top-row clock
     f_seg: IDWriteTextFormat,
+    f_chat: IDWriteTextFormat, // AI messages, wrapped
+    f_line: IDWriteTextFormat, // AI input line
     f_calc: IDWriteTextFormat,
     f_calc_r: IDWriteTextFormat,
     f_lyric: IDWriteTextFormat,
@@ -333,8 +342,8 @@ struct App {
     history: clips::History,
     mouse: (f32, f32), // last pointer position in canvas DIPs
     fx: [Spring; FX_N], // state fades, see FX_*
-    hot: [Spring; 15],  // top-row button hover, by button id
-    cur: [Spring; 15],  // top-row button is the open view, by button id
+    hot: [Spring; 17],  // top-row button hover, by button id
+    cur: [Spring; 17],  // top-row button is the open view, by button id
     dl: Option<Download>,
     dl_spin: Spring,                 // in-progress ring rotation, in turns
     dl_press: Option<(f32, f32)>,    // pressed on a finished download: click opens, drag moves it out
@@ -365,7 +374,7 @@ struct App {
     // Timer.
     view: View,
     xd: [Spring; 3], // expanded (w, h, r) for the current view
-    va: [Spring; 9], // per-view content opacity, indexed by View
+    va: [Spring; 11], // per-view content opacity, indexed by View
     wpage: Spring,   // welcome page, fractional while turning
     w_t0: f32,       // when the current welcome page came in, in `t` seconds
     // File shelf.
@@ -388,6 +397,8 @@ struct App {
     update: Option<updater::Update>, // newer release found, not installed yet
     updating: bool,                  // its installer is downloading
     cc: control::Cc,                 // Control Center state
+    mx: mixer::Mixer,                // Sound Mixer rows
+    ai: ai::Ai,                      // AI chat
     clock_min: std::cell::Cell<u16>, // minute the top-row clock last drew, so a new one redraws
     shown: Spring, // 0 hidden -> 1 shown: the whole island pops in or shrinks away
     scaled: bool,  // the composition visual still carries a show/hide transform
@@ -477,8 +488,8 @@ fn main() -> Result<()> {
                 history: Default::default(),
                 mouse: (0.0, 0.0),
                 fx: [spring(0.0); FX_N],
-                hot: [spring(0.0); 15],
-                cur: [spring(0.0); 15],
+                hot: [spring(0.0); 17],
+                cur: [spring(0.0); 17],
                 dl: None,
                 dl_spin: spring(0.0),
                 dl_press: None,
@@ -508,7 +519,7 @@ fn main() -> Result<()> {
                 rgn: (0, 0, 0, 0),
                 view: View::Player,
                 xd: [spring(EXPANDED.0), spring(EXPANDED.1), spring(EXPANDED.2)],
-                va: [spring(1.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0)],
+                va: [spring(1.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0), spring(0.0)],
                 wpage: spring(0.0),
                 w_t0: 0.0,
                 shelf: Vec::new(),
@@ -528,6 +539,8 @@ fn main() -> Result<()> {
                 update: None,
                 updating: false,
                 cc: Default::default(),
+                mx: Default::default(),
+                ai: Default::default(),
                 clock_min: std::cell::Cell::new(u16::MAX),
                 shown: Spring { x: 0.0, v: 0.0, to: 1.0 }, // pops in on launch
                 scaled: false,
@@ -752,6 +765,13 @@ unsafe fn gfx(hwnd: HWND, dpi: f32) -> Result<Gfx> {
         },
         f_wbtn: fmt(12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER)?,
         f_seg: fmt(11.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+        f_chat: {
+            let f = fmt(12.5, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?;
+            f.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+            f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+            f
+        },
+        f_line: fmt(12.5, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?,
         f_calc: fmt(24.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
         f_calc_r: fmt(17.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
         f_lyric: fmt(13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER)?,
@@ -802,6 +822,33 @@ fn clock() -> (String, u16, u32) {
     }
 }
 
+/// What a top-row button does, shown when it's hovered.
+fn top_label(id: usize) -> &'static str {
+    match id {
+        B_POWER => "Quit",
+        B_TIMER => "Timer",
+        B_CLIPS => "Clipboard",
+        B_PICK => "Colour picker",
+        B_CALC => "Calculator",
+        B_SHELF => "Shelf",
+        B_MIC => "Microphone",
+        B_GEAR => "Settings",
+        B_MIXER => "Sound Mixer",
+        B_AI => "AI",
+        _ => "",
+    }
+}
+
+/// Today as short words in the user's language, e.g. "Sun 25 Oct".
+fn today() -> String {
+    unsafe {
+        let st = GetLocalTime();
+        let mut buf = [0u16; 32];
+        let n = GetDateFormatEx(PCWSTR::null(), Default::default(), Some(&st), w!("ddd d MMM"), Some(&mut buf), PCWSTR::null());
+        if n > 1 { String::from_utf16_lossy(&buf[..n as usize - 1]) } else { format!("{:02}.{:02}.", st.wDay, st.wMonth) }
+    }
+}
+
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
@@ -844,29 +891,28 @@ impl App {
             || self.timer_busy()
             || !self.dl_spin.settled()
             || self.settings_busy()
+            || self.mixer_busy()
+            || self.ai_busy()
             || [self.shelf_drop, self.calc_copied, self.lyric_in, self.ly_c].iter().any(|s| !s.settled())
             || self.fx_busy()
             || self.welcome_busy()
             || self.control_busy()
-            || (self.expand.x > 0.5 && clock().1 != self.clock_min.get())
+            || ((self.expand.x > 0.5 || self.music.x < 0.5) && clock().1 != self.clock_min.get())
     }
 
     /// Where every state fade should head, from the state it shows.
-    fn fx_targets(&self) -> ([f32; FX_N], [f32; 15], [f32; 15]) {
+    fn fx_targets(&self) -> ([f32; FX_N], [f32; 17], [f32; 17]) {
         let b = |x: bool| x as u8 as f32;
         let fx = [b(self.mic_live()), b(self.focus_active), b(self.muted), b(self.mic_muted), b(!self.shelf.is_empty()), b(self.timer.is_some())];
-        let (mut hot, mut cur) = ([0.0; 15], [0.0; 15]);
+        let (mut hot, mut cur) = ([0.0; 17], [0.0; 17]);
         let l = self.layout();
         let (mx, my) = self.mouse;
         let live = self.hover && self.expanded_alpha(&l).0 > 0.5;
-        let buttons = self.top_buttons(&l);
-        // Only the nearest button lights up; neighbours are 24 DIPs apart.
-        let near = buttons.iter().map(|&(id, cx, cy)| (id, (mx - cx).hypot(my - cy))).min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((id, _)) = near.filter(|&(_, d)| live && d < 13.0) {
+        if let Some(id) = self.top_hit(&l, mx, my).filter(|_| live) {
             hot[id] = 1.0;
         }
-        for (id, _, _) in buttons {
-            cur[id] = b(matches!((id, self.view), (B_CLIPS, View::Clips) | (B_GEAR, View::Settings) | (B_SHELF, View::Shelf) | (B_CALC, View::Calc)));
+        for (id, _, _) in self.top_buttons(&l) {
+            cur[id] = b(matches!((id, self.view), (B_CLIPS, View::Clips) | (B_GEAR, View::Settings) | (B_SHELF, View::Shelf) | (B_CALC, View::Calc) | (B_MIXER, View::Mixer) | (B_AI, View::Ai)));
         }
         (fx, hot, cur)
     }
@@ -940,12 +986,12 @@ impl App {
     }
 
     fn on_volume(&mut self, level: f32, muted: bool) {
-        if !self.vsl.drag && self.cc.drag != Some(1) {
+        if !self.vsl.drag && self.cc.drag != Some(1) && self.mx.drag != Some(0) {
             self.vol_level = level; // our own drag already set it; don't fight the pointer
         }
         self.muted = muted;
-        if self.control_open() {
-            return; // Control Center's own slider shows it
+        if self.control_open() || self.mixer_open() {
+            return; // Control Center's or the mixer's own slider shows it
         }
         if self.vsl.drag && self.bright {
             return; // keep the brightness pill under the pointer
@@ -969,7 +1015,7 @@ impl App {
     }
 
     fn release(&mut self) {
-        if self.settings_release() || self.shelf_release() || self.wheel_release() || self.control_release() {
+        if self.settings_release() || self.shelf_release() || self.wheel_release() || self.control_release() || self.mixer_release() {
             return;
         }
         if self.dl_press.take().is_some() {
@@ -1020,7 +1066,7 @@ impl App {
         let (w, h, r) = (lerp(w, CLIP.0, c), lerp(h, CLIP.1, c), lerp(r, CLIP.2, c));
         let v = self.vol.x;
         let (w, h, r) = (lerp(w, VOL.0, v), lerp(h, VOL.1, v), lerp(r, VOL.2, v));
-        Layout { x: (CW - w) / 2.0, y: self.cfg.top, w, h, r: (r * self.cfg.round).min(h / 2.0), e }
+        Layout { x: (CW - w) / 2.0, y: if self.cfg.notch { 0.0 } else { self.cfg.top }, w, h, r: (r * self.cfg.round).min(h / 2.0), e }
     }
 
     fn buttons(&self, l: &Layout) -> [(f32, f32); 3] {
@@ -1119,6 +1165,7 @@ impl App {
         self.fx_step(dt);
         self.welcome_step(dt);
         self.control_step(dt);
+        self.mixer_step(dt);
         // Appear: pop with a little overshoot. Hide: quick and calm, it's in a game's way.
         let (resp, damp) = if self.shown.to > 0.5 { (0.42, 0.7) } else { (0.26, 1.0) };
         self.shown.step(dt, resp, damp);
@@ -1135,6 +1182,33 @@ impl App {
         }
     }
 
+    /// Notch style as one outline, so no seams show: flat top flush with the screen edge, concave
+    /// ears flaring into it like a MacBook notch, rounded bottom corners. False if it couldn't be built.
+    unsafe fn fill_notch(&self, l: &Layout) -> bool {
+        let (x, y, w, h, r) = (l.x, l.y, l.w, l.h, l.r);
+        let e = NOTCH_EAR.min(h / 2.0);
+        let p = |x: f32, y: f32| D2D_POINT_2F { x, y };
+        let arc = |to: D2D_POINT_2F, rad: f32, dir| D2D1_ARC_SEGMENT { point: to, size: D2D_SIZE_F { width: rad, height: rad }, rotationAngle: 0.0, sweepDirection: dir, arcSize: D2D1_ARC_SIZE_SMALL };
+        let (ccw, cw) = (D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_SWEEP_DIRECTION_CLOCKWISE);
+        let Ok(geom) = self.g.factory.CreatePathGeometry() else { return false };
+        let Ok(sink) = geom.Open() else { return false };
+        sink.BeginFigure(p(x - e, y), D2D1_FIGURE_BEGIN_FILLED);
+        sink.AddLine(p(x + w + e, y));
+        sink.AddArc(&arc(p(x + w, y + e), e, ccw));
+        sink.AddLine(p(x + w, y + h - r));
+        sink.AddArc(&arc(p(x + w - r, y + h), r, cw));
+        sink.AddLine(p(x + r, y + h));
+        sink.AddArc(&arc(p(x, y + h - r), r, cw));
+        sink.AddLine(p(x, y + e));
+        sink.AddArc(&arc(p(x - e, y), e, ccw));
+        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        if sink.Close().is_err() {
+            return false;
+        }
+        self.g.dc.FillGeometry(&geom, &self.g.brush, None);
+        true
+    }
+
     unsafe fn draw(&mut self) -> Result<()> {
         let l = self.layout();
         let s = self.dpi / 96.0;
@@ -1144,7 +1218,8 @@ impl App {
         let rgn = if resizing {
             (0, 0, (CW * s).ceil() as i32, (CH * s).ceil() as i32)
         } else {
-            (((l.x - 1.0) * s) as i32, ((l.y - 1.0) * s) as i32, ((l.x + l.w + 1.0) * s).ceil() as i32, ((l.y + l.h + 1.0) * s).ceil() as i32)
+            let ex = if self.cfg.notch { NOTCH_EAR + 1.0 } else { 1.0 }; // the region also clips drawing
+            (((l.x - ex) * s) as i32, ((l.y - 1.0) * s) as i32, ((l.x + l.w + ex) * s).ceil() as i32, ((l.y + l.h + 1.0) * s).ceil() as i32)
         };
         if rgn != self.rgn {
             self.rgn = rgn;
@@ -1156,7 +1231,7 @@ impl App {
         let k = self.shown.x;
         if k != 1.0 || self.scaled {
             let q = lerp(0.55, 1.0, k);
-            let (px, py) = (CW / 2.0 * s, self.cfg.top * s);
+            let (px, py) = (CW / 2.0 * s, l.y * s);
             self.g.visual.SetTransform2(&mat(q, q, px * (1.0 - q), py * (1.0 - q) - (1.0 - k) * 8.0 * s))?;
             self.g.dcomp.Commit()?;
             self.scaled = k != 1.0;
@@ -1174,13 +1249,25 @@ impl App {
         }
         dc.SetTransform(&Matrix3x2::identity());
         br.SetOpacity(1.0);
+        // How much the player shows; gives way to the timer: its countdown when compact, its views when expanded.
+        let music_a = clamp01((self.music.x - 0.4) / 0.6) * clamp01(1.0 - self.clip.x * 2.0) * clamp01(1.0 - self.vol.x * 2.0) * lerp(1.0 - self.tc.x, self.va[0].x, clamp01(l.e));
+        // While a song plays, the island takes on a little of its cover colour, like the waveform.
+        // Scaled by how colourful the cover is, so black-and-white art doesn't turn the island grey.
+        let [ar, ag, ab] = self.accent;
+        let vivid = clamp01((ar.max(ag).max(ab) - ar.min(ag).min(ab)) * 2.0);
+        // Stays on in other expanded views (Settings shows it live), but not behind the compact timer, copied or volume pills.
+        let shown = clamp01((self.music.x - 0.4) / 0.6) * clamp01(1.0 - self.clip.x * 2.0) * clamp01(1.0 - self.vol.x * 2.0) * lerp(1.0 - self.tc.x, 1.0, clamp01(l.e));
+        let on = self.cfg.cover_tint && self.media.is_some() && self.art.is_some();
+        let t = if on { 0.4 * self.cfg.tint * vivid * shown * clamp01(self.wave.x) * clamp01(self.art_in.x) } else { 0.0 };
+        settings::set_tint([ar, ag, ab, t]);
         br.SetColor(&bg(1.0));
-        dc.FillRoundedRectangle(&rrect(l.x, l.y, l.w, l.h, l.r), br);
+        if !(self.cfg.notch && self.fill_notch(&l)) {
+            dc.FillRoundedRectangle(&rrect(l.x, l.y, l.w, l.h, l.r), br);
+        }
 
         if let Some(m) = &self.media {
             let e = clamp01(l.e);
-            // Gives way to the timer: its countdown when compact, its views when expanded.
-            let alpha = clamp01((self.music.x - 0.4) / 0.6) * clamp01(1.0 - self.clip.x * 2.0) * clamp01(1.0 - self.vol.x * 2.0) * lerp(1.0 - self.tc.x, self.va[0].x, e);
+            let alpha = music_a;
             let small = clamp01(1.0 - e * 3.0) * alpha; // compact-only content fades out fast
             let big = clamp01((e - 0.4) / 0.6) * alpha; // expanded content fades in late
 
@@ -1346,6 +1433,18 @@ impl App {
             self.draw_control(&l, cca);
             dc.PopAxisAlignedClip();
         }
+        let ma = self.big_alpha(&l) * self.va[View::Mixer as usize].x;
+        if ma > 0.0 {
+            dc.PushAxisAlignedClip(&rect(l.x, l.y, l.w, l.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            self.draw_mixer(&l, ma);
+            dc.PopAxisAlignedClip();
+        }
+        let aa = self.big_alpha(&l) * self.va[View::Ai as usize].x;
+        if aa > 0.0 {
+            dc.PushAxisAlignedClip(&rect(l.x, l.y, l.w, l.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            self.draw_ai(&l, aa);
+            dc.PopAxisAlignedClip();
+        }
         let wa = self.big_alpha(&l) * self.va[View::Welcome as usize].x;
         if wa > 0.0 {
             dc.PushAxisAlignedClip(&rect(l.x, l.y, l.w, l.h), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
@@ -1365,23 +1464,55 @@ impl App {
         if ta > 0.0 {
             // Top row: timer and clipboard on the left, mic and settings on the right.
             let dy = (1.0 - ta) * 6.0;
-            for (id, cx, cy) in self.top_buttons(&l) {
+            let buttons = self.top_buttons(&l);
+            for &(id, cx, cy) in &buttons {
                 let k = if self.pressed == Some(id) { 1.0 - 0.18 * self.press.x } else { 1.0 };
+                self.top_icon(id, cx, cy + dy, k, ta);
+            }
+            // Hovered button: a pill grows from it toward the middle and names it; the others make room.
+            for &(id, cx, cy) in &buttons {
                 let h = clamp01(self.hot[id].x);
-                if h > 0.0 {
-                    br.SetColor(&fg(0.1 * h * ta));
-                    let r = 11.0 + 2.0 * h;
-                    dc.FillEllipse(&D2D1_ELLIPSE { point: D2D_POINT_2F { x: cx, y: cy + dy }, radiusX: r * k, radiusY: r * k }, br);
+                if h <= 0.0 {
+                    continue;
                 }
-                self.top_icon(id, cx, cy + dy, k * (1.0 + 0.06 * h), ta);
+                let k = if self.pressed == Some(id) { 1.0 - 0.18 * self.press.x } else { 1.0 };
+                let name: Vec<u16> = top_label(id).encode_utf16().collect();
+                let tw = self.label_w(id);
+                let (r, cy) = ((11.0 + 2.0 * h) * k, cy + dy);
+                let w = 2.0 * r + self.label_grow(id);
+                let right = cx < l.x + l.w / 2.0;
+                let pill = if right { rect(cx - r, cy - r, w, 2.0 * r) } else { rect(cx + r - w, cy - r, w, 2.0 * r) };
+                let rr = D2D1_ROUNDED_RECT { rect: pill, radiusX: r, radiusY: r };
+                br.SetColor(&fg(0.1 * h * ta));
+                dc.FillRoundedRectangle(&rr, br);
+                self.top_icon(id, cx, cy, k * (1.0 + 0.06 * h), ta);
+                dc.PushAxisAlignedClip(&pill, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                let lx = if right { cx + r - 2.0 } else { cx - r - tw + 2.0 };
+                br.SetColor(&fg(ta * h));
+                dc.DrawText(&name, &g.f_seg, &rect(lx, cy - 8.0, tw, 16.0), br, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+                dc.PopAxisAlignedClip();
             }
             // Clock in the middle of the row, local time in the user's own format.
             let (now, min, ms) = clock();
-            br.SetColor(&fg(ta * 0.9));
+            let lab = buttons.iter().map(|&(id, _, _)| clamp01(self.hot[id].x)).fold(0.0, f32::max);
+            br.SetColor(&fg(ta * 0.9 * (1.0 - lab)));
             let tx: Vec<u16> = now.encode_utf16().collect();
             dc.DrawText(&tx, &g.f_wbtn, &rect(l.x + l.w / 2.0 - 50.0, l.y + 10.0 + dy, 100.0, 20.0), br, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
             if self.clock_min.replace(min) != min {
                 SetTimer(self.hwnd, T_CLOCK, ms + 50, None); // the timer only wakes the loop; animating() sees the new minute
+            }
+        }
+        // Resting pill: clock with the date under it, gone as soon as anything else takes the island.
+        let ka = clamp01(1.0 - self.music.x * 2.0) * clamp01(1.0 - self.clip.x * 2.0) * clamp01(1.0 - self.vol.x * 2.0) * clamp01(1.0 - l.e * 3.0);
+        if ka > 0.0 {
+            let (now, min, ms) = clock();
+            let (cx, cy) = (l.x + l.w / 2.0, l.y + l.h / 2.0);
+            br.SetColor(&fg(ka));
+            dc.DrawText(&now.encode_utf16().collect::<Vec<_>>(), &g.f_wbtn, &rect(cx - 50.0, cy - 16.0, 100.0, 17.0), br, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+            br.SetColor(&fg(ka * 0.6));
+            dc.DrawText(&today().encode_utf16().collect::<Vec<_>>(), &g.f_seg, &rect(cx - 50.0, cy + 1.0, 100.0, 15.0), br, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+            if self.clock_min.replace(min) != min {
+                SetTimer(self.hwnd, T_CLOCK, ms + 50, None);
             }
         }
         if self.media.is_none() && self.timer.is_none() {
@@ -1553,14 +1684,62 @@ impl App {
     fn top_buttons(&self, l: &Layout) -> Vec<(usize, f32, f32)> {
         let cy = l.y + 20.0;
         let r = l.x + l.w;
-        let mut v = vec![(B_POWER, l.x + 30.0, cy), (B_CLIPS, l.x + 78.0, cy), (B_CALC, r - 102.0, cy), (B_SHELF, r - 78.0, cy), (B_MIC, r - 54.0, cy), (B_GEAR, r - 30.0, cy)];
+        let mut v = vec![(B_POWER, l.x + 30.0, cy), (B_CLIPS, l.x + 78.0, cy), (B_AI, r - 126.0, cy), (B_CALC, r - 102.0, cy), (B_SHELF, r - 78.0, cy), (B_MIC, r - 54.0, cy), (B_GEAR, r - 30.0, cy)];
         if self.cfg.pills[P_TIMER] {
             v.push((B_TIMER, l.x + 54.0, cy));
         } else {
             v[1].1 = l.x + 54.0;
         }
         v.push((B_PICK, v[1].1 + 24.0, cy));
+        v.push((B_MIXER, v[1].1 + 48.0, cy));
+        // A hovered button's label pill pushes the buttons between it and the clock toward the middle.
+        let (mid, base) = (l.x + l.w / 2.0, v.clone());
+        for &(j, cj, _) in &base {
+            let g = self.label_grow(j);
+            if g > 0.0 {
+                for (b, &(_, cb, _)) in v.iter_mut().zip(&base) {
+                    if cj < mid && cb > cj && cb < mid {
+                        b.1 += g;
+                    } else if cj > mid && cb < cj && cb > mid {
+                        b.1 -= g;
+                    }
+                }
+            }
+        }
         v
+    }
+
+    /// Room a top-row button's label takes, in DIPs: its text plus padding.
+    fn label_w(&self, id: usize) -> f32 {
+        let name: Vec<u16> = top_label(id).encode_utf16().collect();
+        let w = unsafe { self.g.dw.CreateTextLayout(&name, &self.g.f_seg, 200.0, 20.0) }.ok().and_then(|t| {
+            let mut m = DWRITE_TEXT_METRICS::default();
+            unsafe { t.GetMetrics(&mut m) }.ok().map(|_| m.width)
+        });
+        w.unwrap_or(60.0) + 12.0
+    }
+
+    /// How far a button's label pill has grown out of it right now (eased hover).
+    fn label_grow(&self, id: usize) -> f32 {
+        let h = clamp01(self.hot[id].x);
+        if h > 0.0 { self.label_w(id) * h * h * (3.0 - 2.0 * h) } else { 0.0 }
+    }
+
+    /// Button under (x, y): the hovered one anywhere on its label pill, else the nearest icon.
+    fn top_hit(&self, l: &Layout, x: f32, y: f32) -> Option<usize> {
+        let buttons = self.top_buttons(l);
+        let mid = l.x + l.w / 2.0;
+        let on_pill = buttons.iter().find(|&&(id, cx, cy)| {
+            let g = self.label_grow(id);
+            let (a, b) = if cx < mid { (cx - 13.0, cx + 13.0 + g) } else { (cx - 13.0 - g, cx + 13.0) };
+            self.hot[id].to > 0.5 && x >= a && x <= b && (y - cy).abs() < 13.0
+        });
+        if let Some(&(id, _, _)) = on_pill {
+            return Some(id);
+        }
+        // Only the nearest button lights up; neighbours are 24 DIPs apart.
+        let near = buttons.iter().map(|&(id, cx, cy)| (id, (x - cx).hypot(y - cy))).min_by(|a, b| a.1.total_cmp(&b.1));
+        near.filter(|&(_, d)| d < 13.0).map(|(id, _)| id)
     }
 
     /// Opacity of the expanded top row (shown over the player, the clipboard list and settings),
@@ -1572,7 +1751,9 @@ impl App {
         let set = big * self.va[View::Settings as usize].x;
         let shelf = big * self.va[View::Shelf as usize].x;
         let calc = big * self.va[View::Calc as usize].x;
-        (big * player + clips + set + shelf + calc, clips, set, shelf, calc)
+        let mixer = big * self.va[View::Mixer as usize].x;
+        let ai = big * self.va[View::Ai as usize].x;
+        (big * player + clips + set + shelf + calc + mixer + ai, clips, set, shelf, calc)
     }
 
     /// Opacity of expanded-only content: late in the expansion, and out of a notice's way.
@@ -1683,6 +1864,33 @@ impl App {
                     let (ar, ag, ab) = settings::accent();
                     br.SetColor(&rgba(ar, ag, ab, a * clamp01(d) / 0.75));
                     dc.FillEllipse(&D2D1_ELLIPSE { point: p(20.5, 4.0), radiusX: 2.6 * k * d, radiusY: 2.6 * k * d }, br);
+                }
+            }
+            B_AI => {
+                // Sparkle: a four-pointed star with curved sides, and a small one top right.
+                let star = |cx: f32, cy: f32, r: f32| {
+                    let Ok(geom) = self.g.factory.CreatePathGeometry() else { return };
+                    let Ok(sink) = geom.Open() else { return };
+                    let q = |x: f32, y: f32, ex: f32, ey: f32| sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT { point1: p(x, y), point2: p(ex, ey) });
+                    let k = r * 0.16;
+                    sink.BeginFigure(p(cx, cy - r), D2D1_FIGURE_BEGIN_FILLED);
+                    q(cx + k, cy - k, cx + r, cy);
+                    q(cx + k, cy + k, cx, cy + r);
+                    q(cx - k, cy + k, cx - r, cy);
+                    q(cx - k, cy - k, cx, cy - r);
+                    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                    if sink.Close().is_ok() {
+                        dc.FillGeometry(&geom, br, None);
+                    }
+                };
+                star(10.5, 13.0, 8.5);
+                star(19.0, 5.0, 3.6);
+            }
+            B_MIXER => {
+                // Mixer: three channel strips, each with its fader knob at a different height.
+                for (x, k) in [(6.0, 14.5), (12.0, 8.0), (18.0, 16.5)] {
+                    line(x, 4.0, x, 20.0, 1.8);
+                    line(x - 2.8, k, x + 2.8, k, 2.6);
                 }
             }
             B_PICK => {
@@ -1993,40 +2201,52 @@ impl App {
             return self.control_click(x, y);
         }
         if self.expanded_alpha(&l).0 > 0.5 {
-            for (id, cx, cy) in self.top_buttons(&l) {
-                if (x - cx).hypot(y - cy) < 13.0 {
-                    self.pressed = Some(id);
-                    self.press = Spring { x: 1.0, v: 0.0, to: 0.0 };
-                    match id {
-                        B_MIC => self.toggle_mic(),
-                        B_TIMER => self.set_view(if self.timer.is_some() { View::Run } else { View::Pick }),
-                        // Toggles between the list and the player (or stays when nothing plays).
-                        B_CLIPS => self.set_view(if self.view == View::Clips && self.media.is_some() { View::Player } else { View::Clips }),
-                        B_POWER => unsafe { PostQuitMessage(0) },
-                        B_PICK => self.start_pick(),
-                        B_SHELF => self.set_view(if self.view == View::Shelf { self.default_view() } else { View::Shelf }),
-                        B_CALC => {
-                            if self.view == View::Calc {
-                                self.set_view(self.default_view());
-                            } else {
-                                self.open_calc();
-                            }
-                        }
-                        _ => {
-                            if self.view == View::Settings {
-                                self.set_view(self.default_view());
-                            } else {
-                                self.su.mons = settings::monitors();
-                                self.su.startup = system::startup_enabled();
-                                self.set_view(View::Settings);
-                            }
+            if let Some(id) = self.top_hit(&l, x, y) {
+                self.pressed = Some(id);
+                self.press = Spring { x: 1.0, v: 0.0, to: 0.0 };
+                match id {
+                    B_MIC => self.toggle_mic(),
+                    B_TIMER => self.set_view(if self.timer.is_some() { View::Run } else { View::Pick }),
+                    // Toggles between the list and the player (or stays when nothing plays).
+                    B_CLIPS => self.set_view(if self.view == View::Clips && self.media.is_some() { View::Player } else { View::Clips }),
+                    B_POWER => unsafe { PostQuitMessage(0) },
+                    B_PICK => self.start_pick(),
+                    B_AI => {
+                        if self.view == View::Ai {
+                            self.set_view(self.default_view());
+                        } else {
+                            self.open_ai();
                         }
                     }
-                    return;
+                    B_MIXER => {
+                        if self.view == View::Mixer {
+                            self.set_view(self.default_view());
+                        } else {
+                            self.open_mixer();
+                        }
+                    }
+                    B_SHELF => self.set_view(if self.view == View::Shelf { self.default_view() } else { View::Shelf }),
+                    B_CALC => {
+                        if self.view == View::Calc {
+                            self.set_view(self.default_view());
+                        } else {
+                            self.open_calc();
+                        }
+                    }
+                    _ => {
+                        if self.view == View::Settings {
+                            self.set_view(self.default_view());
+                        } else {
+                            self.su.mons = settings::monitors();
+                            self.su.startup = system::startup_enabled();
+                            self.set_view(View::Settings);
+                        }
+                    }
                 }
+                return;
             }
         }
-        if self.settings_click(x, y) || self.clips_click(x, y) || self.shelf_click(x, y) || self.view == View::Calc || self.timer_click(x, y) || self.media.is_none() {
+        if self.ai_click(x, y) || self.mixer_click(x, y) || self.settings_click(x, y) || self.clips_click(x, y) || self.shelf_click(x, y) || self.view == View::Calc || self.timer_click(x, y) || self.media.is_none() {
             return;
         }
         if self.slider_hit(x, y) {
@@ -2094,17 +2314,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let (key, lines) = *Box::from_raw(lp.0 as *mut (String, lyrics::Lines));
                 app.on_lyrics(key, lines);
             }
-            WM_CHAR => app.calc_char(wp.0 as u32),
+            WM_CHAR => {
+                app.calc_char(wp.0 as u32);
+                app.ai_char(wp.0 as u32);
+            }
             WM_FULLSCREEN => app.on_fullscreen(wp.0 != 0),
             WM_ACTIVATE => {
-                if wp.0 & 0xffff == WA_INACTIVE as usize && app.view == View::Calc {
-                    app.expand.to = 0.0; // clicked away from the calculator
+                if wp.0 & 0xffff == WA_INACTIVE as usize && matches!(app.view, View::Calc | View::Ai) {
+                    app.expand.to = 0.0; // clicked away from the calculator or the chat
                 }
                 return None;
             }
             WM_PICK => app.on_pick(wp.0, lp.0 as u32),
             WM_UPDATE => app.on_update(wp.0, lp.0),
             WM_RADIO => app.on_radio(wp.0),
+            WM_AI => {
+                let (path, answer) = *Box::from_raw(lp.0 as *mut (std::path::PathBuf, std::result::Result<String, String>));
+                app.on_ai(path, answer);
+            }
             WM_USB => app.on_usb(wp.0 == 1, *Box::from_raw(lp.0 as *mut String)),
             WM_BUDS => {
                 let (name, battery) = *Box::from_raw(lp.0 as *mut (String, Option<u8>));
@@ -2112,7 +2339,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             WM_MOUSEACTIVATE => return Some(LRESULT(MA_NOACTIVATE as isize)),
             WM_MOUSEMOVE => {
-                if !app.hover {
+                let (x, y) = ((lp.0 & 0xffff) as i16 as f32 / s, ((lp.0 >> 16) & 0xffff) as i16 as f32 / s);
+                let l = app.layout();
+                // While resizing the hit region is the whole canvas; only the island itself counts as hover.
+                if !app.hover && x >= l.x && x <= l.x + l.w && y >= l.y && y <= l.y + l.h {
                     app.hover = true;
                     let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
                         cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
@@ -2123,7 +2353,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     let _ = KillTimer(hwnd, T_LEAVE);
                     SetTimer(hwnd, T_HOVER, 80, None);
                 }
-                let (x, y) = ((lp.0 & 0xffff) as i16 as f32 / s, ((lp.0 >> 16) & 0xffff) as i16 as f32 / s);
                 app.mouse = (x, y);
                 if let Some((px, py, i)) = app.shelf_press {
                     if (x - px).hypot(y - py) > 5.0 {
@@ -2152,6 +2381,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.wheel_move(y);
                 app.settings_move(x, y);
                 app.control_move(x, y);
+                app.mixer_move(x, y);
             }
             WM_MOUSEWHEEL => {
                 let mut pt = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
@@ -2160,6 +2390,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let (x, y) = (pt.x as f32 / s, pt.y as f32 / s);
                 if app.view == View::Pick && app.expand.x > 0.5 {
                     app.wheel_scroll(x, y, notches);
+                } else if app.view == View::Ai && app.expand.to > 0.5 {
+                    app.ai_scroll(notches);
                 } else if app.control_wheel(notches) {
                 } else if notches < 0.0 && app.view != View::Welcome {
                     app.open_control(); // scroll down: Control Center, like pulling it down on iOS
@@ -2200,13 +2432,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     app.tick();
                 } else if wp.0 == T_DONE {
                     app.cancel_timer();
-                } else if wp.0 == T_HOVER && app.hover && (app.media.is_some() || app.timer.is_some()) && app.vol.to < 0.5 && app.clip.to < 0.5 {
+                } else if wp.0 == T_HOVER && app.hover && app.vol.to < 0.5 && app.clip.to < 0.5 {
                     if app.expand.to < 0.5 {
                         app.set_view(app.default_view());
                     }
                     app.expand.to = 1.0;
                 } else if wp.0 == T_LEAVE && !app.hover && !app.sl.drag && app.wdrag.is_none() && app.su.drag.is_none() && app.cc.drag.is_none() && app.shelf_press.is_none() && app.shelf_drop.to < 0.5
-                    && !(app.view == View::Calc && GetForegroundWindow() == hwnd)
+                    && !(matches!(app.view, View::Calc | View::Ai) && GetForegroundWindow() == hwnd)
                     && app.view != View::Welcome // the tour closes with its own buttons
                 {
                     app.expand.to = 0.0;

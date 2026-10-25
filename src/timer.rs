@@ -14,10 +14,12 @@ pub enum View {
     Calc,     // src/calc.rs
     Welcome,  // src/welcome.rs, first run only
     Control,  // src/control.rs
+    Mixer,    // src/mixer.rs
+    Ai,       // src/ai.rs
 }
 
-pub const PICK: (f32, f32, f32) = (340.0, 214.0, 42.0);
-pub const RUN: (f32, f32, f32) = (340.0, 96.0, 40.0);
+pub const PICK: (f32, f32, f32) = (WIDE, 214.0, 42.0);
+pub const RUN: (f32, f32, f32) = (WIDE, 96.0, 40.0);
 pub const T_TICK: usize = 5;
 pub const T_DONE: usize = 6;
 const DONE_MS: u32 = 10_000; // a finished timer clears itself after this
@@ -74,7 +76,7 @@ fn utf16(s: &str) -> Vec<u16> {
 
 impl App {
     pub fn set_view(&mut self, v: View) {
-        if self.view == View::Calc && v != View::Calc {
+        if matches!(self.view, View::Calc | View::Ai) && v != self.view {
             self.close_calc_focus();
         }
         self.view = v;
@@ -88,6 +90,8 @@ impl App {
             View::Calc => calc::CALC,
             View::Welcome => welcome::WELCOME,
             View::Control => control::CONTROL,
+            View::Mixer => self.mixer_size(),
+            View::Ai => ai::AI,
         };
         self.xd[0].to = d.0;
         self.xd[1].to = d.1;
@@ -265,7 +269,7 @@ impl App {
         let l = self.layout();
         let hit = |(cx, cy): (f32, f32)| (x - cx).hypot(y - cy) < 25.0;
         match self.view {
-            View::Player | View::Clips | View::Settings | View::Shelf | View::Calc | View::Welcome | View::Control => return false,
+            View::Player | View::Clips | View::Settings | View::Shelf | View::Calc | View::Welcome | View::Control | View::Mixer | View::Ai => return false,
             View::Pick => {
                 let [cancel, start] = Self::pick_buttons(&l);
                 if hit(cancel) {
@@ -448,10 +452,9 @@ impl App {
 
         let [cancel, start] = Self::pick_buttons(l);
         let enabled = self.picked() > 0.0;
-        let (gr, gg, gb) = GREEN;
         for (id, (cx, by), fill, (tr, tg, tb), label, on) in [
             (B_PCANCEL, cancel, surface_rgb(), fg_rgb(), "Cancel", true),
-            (B_PSTART, start, (0.07, 0.25, 0.11), (gr, gg, gb), "Start", enabled),
+            (B_PSTART, start, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0), "Start", enabled),
         ] {
             let k = if self.pressed == Some(id) { 1.0 - 0.15 * self.press.x } else { 1.0 };
             let dim = if on { 1.0 } else { 0.45 };

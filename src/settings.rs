@@ -3,16 +3,17 @@
 use super::*;
 use crate::config::*;
 
-pub const SETTINGS: (f32, f32, f32) = (340.0, 266.0, 36.0);
+pub const SETTINGS: (f32, f32, f32) = (WIDE, 290.0, 36.0);
 const TABS: [&str; 6] = ["Look", "Theme", "Motion", "Pills", "Priority", "Music"];
 const TAB_Y: f32 = 46.0; // tab bar centre, from the island top
 const ROWS_Y: f32 = 64.0; // first row's top
 const ROW: f32 = 24.0;
+const STYLES: [&str; 2] = ["Island", "Notch"];
 const RANK_ROW: f32 = 20.0;
 const PILL_ROWS: usize = 7; // Pills page: switches per column
 
 pub enum Drag {
-    Slider(usize),  // 0 corners, 1 top gap, 2 speed, 3 bounce
+    Slider(usize),  // 0 corners, 1 top gap, 2 speed, 3 bounce, 4 cover tint
     Rank(u8, f32),  // kind being moved, pointer offset inside its row
     Color(usize),   // custom theme strip: colour * 2 + (0 hue, 1 lightness)
 }
@@ -21,15 +22,15 @@ pub struct SetUi {
     page: usize,
     tab: Spring,
     tog: [Spring; PILLS.len()],
-    seg: [Spring; 4], // size, display, feel, music mode (x = selected index)
-    sl: [Slider; 4],
+    seg: [Spring; 5], // size, display, feel, music mode, style (x = selected index)
+    sl: [Slider; 5],
     pub drag: Option<Drag>,
     ry: [Spring; 7], // priority row position per kind, in rows
     pv: Spring,      // motion preview pill, 0 narrow .. 1 wide
     pub mons: Vec<HMONITOR>,
     th: Spring,       // theme picker ring position
     reset_armed: bool, // first click on Reset asks for a second
-    gen: [Spring; 3],  // Look page switches: hide in fullscreen, start with Windows, mic dot
+    gen: [Spring; 4],  // switches: hide in fullscreen, start with Windows, mic dot (Look), cover colour (Theme)
     pub startup: bool, // read from the registry when settings open
 }
 
@@ -43,15 +44,15 @@ impl SetUi {
             page: 0,
             tab: spring(0.0),
             tog: [spring(0.0); PILLS.len()],
-            seg: [spring(0.0); 4],
-            sl: [Slider::new(0.0), Slider::new(0.0), Slider::new(0.0), Slider::new(0.0)],
+            seg: [spring(0.0); 5],
+            sl: std::array::from_fn(|_| Slider::new(0.0)),
             drag: None,
             ry,
             pv: spring(0.0),
             mons: Vec::new(),
             th: spring(c.theme as f32),
             reset_armed: false,
-            gen: [spring(c.hide_fs as u8 as f32), spring(0.0), spring(c.mic_dot as u8 as f32)],
+            gen: [spring(c.hide_fs as u8 as f32), spring(0.0), spring(c.mic_dot as u8 as f32), spring(c.cover_tint as u8 as f32)],
             startup: false,
         }
     }
@@ -94,7 +95,8 @@ impl App {
             0 => (c.round - 0.3) / 0.7,
             1 => c.top / 40.0,
             2 => (c.speed - 0.5) / 1.1,
-            _ => c.bounce,
+            3 => c.bounce,
+            _ => c.tint,
         }
     }
 
@@ -105,7 +107,8 @@ impl App {
             0 => c.round = 0.3 + 0.7 * v,
             1 => c.top = (40.0 * v).round(),
             2 => c.speed = 0.5 + 1.1 * v,
-            _ => c.bounce = v,
+            3 => c.bounce = v,
+            _ => c.tint = v,
         }
     }
 
@@ -118,7 +121,7 @@ impl App {
             t.to = c.pills[i] as u8 as f32;
             t.step(dt, 0.3, 0.75);
         }
-        let targets = [c.size as f32, display_seg(c.display) as f32, c.feel().map_or(-1.0, |f| f as f32), c.music as f32];
+        let targets = [c.size as f32, display_seg(c.display) as f32, c.feel().map_or(-1.0, |f| f as f32), c.music as f32, c.notch as u8 as f32];
         for (s, to) in u.seg.iter_mut().zip(targets) {
             s.to = to;
             s.step(dt, 0.35, 0.8);
@@ -137,11 +140,11 @@ impl App {
         u.pv.step(dt, 0.42, 0.72);
         u.th.to = c.theme as f32;
         u.th.step(dt, 0.35, 0.8);
-        for (s, on) in u.gen.iter_mut().zip([c.hide_fs, u.startup, c.mic_dot]) {
+        for (s, on) in u.gen.iter_mut().zip([c.hide_fs, u.startup, c.mic_dot, c.cover_tint]) {
             s.to = on as u8 as f32;
             s.step(dt, 0.3, 0.75);
         }
-        let vals = [0, 1, 2, 3].map(|i| self.slider_value(i));
+        let vals = [0, 1, 2, 3, 4].map(|i| self.slider_value(i));
         for (s, v) in self.su.sl.iter_mut().zip(vals) {
             s.step(dt, v);
         }
@@ -165,7 +168,7 @@ impl App {
         if c.size != old.size {
             let _ = unsafe { self.resize(self.sys_dpi) };
         }
-        if c.display != old.display || c.top != old.top {
+        if c.display != old.display || c.top != old.top || c.notch != old.notch {
             self.reposition();
         }
         if c.music != old.music || c.apps != old.apps || c.pills[P_MUSIC] != old.pills[P_MUSIC] {
@@ -209,8 +212,8 @@ impl App {
         (x0 + 4.0, x1 - x0 - 8.0, Self::row_cy(l, row))
     }
 
-    /// Rows that hold the four sliders: (page, row).
-    const SLIDERS: [(usize, usize); 4] = [(0, 1), (0, 2), (2, 1), (2, 2)];
+    /// Rows that hold the sliders: (page, row).
+    const SLIDERS: [(usize, usize); 5] = [(0, 1), (0, 2), (2, 1), (2, 2), (1, 6)];
 
     /// Custom theme strip for `color` (row 1..3 on the Theme page): hue on the left half,
     /// lightness on the right. Returns (left, right, centre y).
@@ -222,7 +225,7 @@ impl App {
     }
 
     fn reset_button(l: &Layout) -> D2D_RECT_F {
-        let cy = Self::row_cy(l, 7);
+        let cy = Self::row_cy(l, 8);
         rect(l.x + l.w / 2.0 - 80.0, cy - 10.0, 160.0, 20.0)
     }
 
@@ -263,15 +266,21 @@ impl App {
                     self.cfg.size = i;
                 }
             }
-            (0, 4) => self.cfg.hide_fs = !self.cfg.hide_fs,
-            (0, 5) => {
+            (0, 3) => {
+                if let Some(i) = seg_at(STYLES.len(), x0, x1) {
+                    self.cfg.notch = i == 1;
+                }
+            }
+            (0, 5) => self.cfg.hide_fs = !self.cfg.hide_fs,
+            (0, 6) => {
                 let on = !self.su.startup;
                 if system::set_startup(on).is_ok() {
                     self.su.startup = on;
                 }
             }
-            (0, 6) => self.cfg.mic_dot = !self.cfg.mic_dot,
-            (0, 7) => {
+            (0, 7) => self.cfg.mic_dot = !self.cfg.mic_dot,
+            (1, 5) => self.cfg.cover_tint = !self.cfg.cover_tint,
+            (0, 8) => {
                 let b = Self::reset_button(&l);
                 if x >= b.left && x <= b.right {
                     if self.su.reset_armed {
@@ -295,7 +304,7 @@ impl App {
                     return true;
                 }
             }
-            (0, 3) => {
+            (0, 4) => {
                 if let Some(i) = seg_at(display_labels(self.su.mons.len()).len(), x0, x1) {
                     self.cfg.display = match i {
                         0 => 0,
@@ -381,7 +390,7 @@ impl App {
         if let Drag::Slider(i) = d {
             self.su.sl[i].drag = false;
             self.su.sl[i].held = false;
-            if i >= 2 {
+            if i == 2 || i == 3 {
                 self.su.pv.to = 1.0 - self.su.pv.to; // preview the new spring
             }
         }
@@ -421,7 +430,8 @@ impl App {
             let (ar, ag, ab) = accent();
             br.SetColor(&rgba(ar, ag, ab, al * clamp01(s)));
             dc.FillRoundedRectangle(&track, br);
-            br.SetColor(&rgba(1.0, 1.0, 1.0, al)); // knob stays white on every theme
+            let k = if ar.min(ag).min(ab) > 0.8 { 0.0 } else { 1.0 }; // white knob, black on a white track
+            br.SetColor(&rgba(k, k, k, al));
             let kx = right - w + h / 2.0 + (w - h) * s;
             dc.FillEllipse(&D2D1_ELLIPSE { point: D2D_POINT_2F { x: kx, y: cy }, radiusX: h / 2.0 - 2.0, radiusY: h / 2.0 - 2.0 }, br);
         };
@@ -453,12 +463,14 @@ impl App {
                 slider(0, 1);
                 label(2, "Top gap");
                 slider(1, 2);
-                label(3, "Display");
+                label(3, "Style");
+                segmented(x0, x1, Self::row_cy(l, 3), &STYLES, u.seg[4].x);
+                label(4, "Display");
                 let d = display_labels(u.mons.len());
-                segmented(x0, x1, Self::row_cy(l, 3), &d.iter().map(String::as_str).collect::<Vec<_>>(), u.seg[1].x);
-                for (row, name) in [(4, "Hide in fullscreen"), (5, "Start with Windows"), (6, "Microphone dot")] {
+                segmented(x0, x1, Self::row_cy(l, 4), &d.iter().map(String::as_str).collect::<Vec<_>>(), u.seg[1].x);
+                for (row, name) in [(5, "Hide in fullscreen"), (6, "Start with Windows"), (7, "Microphone dot")] {
                     text(name, &g.f_row, rect(l.x + 24.0, Self::row_cy(l, row) - 10.0, 200.0, 20.0), a * 0.85);
-                    toggle(x1, Self::row_cy(l, row), u.gen[row - 4].x, a);
+                    toggle(x1, Self::row_cy(l, row), u.gen[row - 5].x, a);
                 }
                 let b = Self::reset_button(l);
                 br.SetColor(&fg(a * 0.1));
@@ -467,7 +479,15 @@ impl App {
                 br.SetColor(&rgba(1.0, 0.27, 0.23, al));
                 dc.DrawText(&msg.encode_utf16().collect::<Vec<_>>(), &g.f_seg, &b, br, opts, mm);
             }
-            1 => self.draw_theme_page(l, a),
+            1 => {
+                self.draw_theme_page(l, a);
+                text("Cover colour", &g.f_row, rect(l.x + 24.0, Self::row_cy(l, 5) - 10.0, 200.0, 20.0), a * 0.85);
+                toggle(x1, Self::row_cy(l, 5), u.gen[3].x, a);
+                let on = lerp(0.4, 1.0, u.gen[3].x); // strength dims while the switch is off
+                text("Strength", &g.f_row, rect(l.x + 24.0, Self::row_cy(l, 6) - 10.0, 90.0, 20.0), a * 0.85 * on);
+                let (bx, len, cy) = Self::slider_track(l, 6);
+                u.sl[4].draw(dc, br, bx, len, cy, a * on * (0.7 + 0.3 * u.sl[4].a.x), 4.0);
+            }
             2 => {
                 label(0, "Feel");
                 segmented(x0, x1, Self::row_cy(l, 0), &FEELS.map(|f| f.0), u.seg[2].x);
@@ -632,10 +652,23 @@ pub fn fg_rgb() -> (f32, f32, f32) {
     (r, g, b)
 }
 
+thread_local! { static TINT: std::cell::Cell<[f32; 4]> = const { std::cell::Cell::new([0.0; 4]) }; }
+
+/// Cover colour mixed into the island colour while a song plays: [r, g, b, amount].
+pub fn set_tint(t: [f32; 4]) {
+    TINT.with(|c| c.set(t));
+}
+
+/// The theme's island colour, without the cover tint.
+pub fn island_rgb() -> [f32; 3] {
+    theme()[0]
+}
+
 /// Island fill colour at opacity `a`; also cuts glyph outlines.
 pub fn bg(a: f32) -> D2D1_COLOR_F {
     let [[r, g, b], _, _] = theme();
-    rgba(r, g, b, a)
+    let [tr, tg, tb, k] = TINT.with(|c| c.get());
+    rgba(lerp(r, tr, k), lerp(g, tg, k), lerp(b, tb, k), a)
 }
 
 /// Raised surface (buttons, wheel band): the island colour lifted toward the text colour.

@@ -266,7 +266,7 @@ impl App {
         let done = self.dl.as_ref().is_some_and(|d| d.done);
         let r = 9.5 * k;
         let ring = D2D1_ELLIPSE { point: D2D_POINT_2F { x: cx, y: cy }, radiusX: r, radiusY: r };
-        let (gr, gg, gb) = if done { GREEN } else { fg_rgb() };
+        let (gr, gg, gb) = fg_rgb();
         br.SetColor(&rgba(gr, gg, gb, a * if done { 1.0 } else { 0.25 }));
         dc.DrawEllipse(&ring, br, 2.2 * k, None);
         if !done {

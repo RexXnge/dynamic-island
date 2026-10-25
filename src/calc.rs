@@ -2,7 +2,7 @@
 // keyboard focus only while this view is open, and hands it back when it closes.
 use super::*;
 
-pub const CALC: (f32, f32, f32) = (340.0, 112.0, 36.0);
+pub const CALC: (f32, f32, f32) = (WIDE, 112.0, 36.0);
 const MAX_INPUT: usize = 80;
 
 /// Evaluates `input` as a unit conversion ("5 km to mi") or else as arithmetic.

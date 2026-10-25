@@ -6,7 +6,7 @@ pub const SIZES: [(&str, f32); 3] = [("Compact", 0.88), ("Default", 1.0), ("Larg
 pub const FEELS: [(&str, f32, f32); 4] = [("Snappy", 0.75, 0.3), ("iOS", 1.0, 0.5), ("Bouncy", 1.05, 0.85), ("Calm", 1.4, 0.12)];
 /// Colour themes: (name, [island, text, accent]). The last one is built from `Config::custom`.
 pub const THEMES: [(&str, [[f32; 3]; 3]); 6] = [
-    ("Dark", [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [0.2, 0.84, 0.29]]),
+    ("Dark", [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]),
     ("Light", [[0.96, 0.96, 0.97], [0.07, 0.07, 0.08], [0.0, 0.48, 1.0]]),
     ("Midnight", [[0.04, 0.06, 0.16], [0.86, 0.9, 1.0], [0.42, 0.6, 1.0]]),
     ("Rose", [[0.16, 0.05, 0.09], [1.0, 0.9, 0.93], [1.0, 0.42, 0.6]]),
@@ -48,6 +48,7 @@ pub struct Config {
     pub size: usize,  // index into SIZES
     pub round: f32,   // 0.3 (squarish) .. 1.0 (capsule) times each shape's corner radius
     pub top: f32,     // DIPs from the top of the screen, 0..40
+    pub notch: bool,  // flush with the screen top, square top corners; ignores `top`
     pub display: i32, // -1 follows the mouse, 0 the main display, n the n-th other one
     pub speed: f32,   // spring response multiplier, 0.5..1.6
     pub bounce: f32,  // 0 none .. 1 a lot
@@ -60,6 +61,8 @@ pub struct Config {
     pub welcomed: bool,            // the first-run welcome has been seen
     pub theme: usize,              // index into THEMES
     pub custom: [[f32; 2]; 3],     // Custom theme: (hue, lightness) for island, text, accent
+    pub cover_tint: bool,          // island takes on the cover colour while a song plays
+    pub tint: f32,                 // how much of it, 0..1
 }
 
 impl Default for Config {
@@ -68,6 +71,7 @@ impl Default for Config {
             size: 1,
             round: 1.0,
             top: 8.0,
+            notch: false,
             display: 0,
             speed: 1.0,
             bounce: 0.5,
@@ -80,6 +84,8 @@ impl Default for Config {
             welcomed: false,
             theme: 0,
             custom: [[0.62, 0.1], [0.62, 0.95], [0.55, 0.6]],
+            cover_tint: false,
+            tint: 0.45,
         }
     }
 }
@@ -124,8 +130,11 @@ impl Config {
                 "display" => c.display = v.parse::<i32>().ok().filter(|&d| d >= -1).unwrap_or(c.display),
                 "speed" => c.speed = f(0.5, 1.6).unwrap_or(c.speed),
                 "bounce" => c.bounce = f(0.0, 1.0).unwrap_or(c.bounce),
+                "notch" => c.notch = v == "1",
                 "hide_fs" => c.hide_fs = v == "1",
                 "mic_dot" => c.mic_dot = v == "1",
+                "cover_tint" => c.cover_tint = v == "1",
+                "tint" => c.tint = f(0.0, 1.0).unwrap_or(c.tint),
                 "welcomed" => c.welcomed = v == "1",
                 "theme" => c.theme = v.parse::<usize>().ok().filter(|&t| t < THEMES.len()).unwrap_or(c.theme),
                 "custom" => {
@@ -178,10 +187,11 @@ impl Config {
     fn to_text(&self) -> String {
         let b = |x: bool| if x { "1" } else { "0" };
         let mut s = format!(
-            "size={}\nround={}\ntop={}\ndisplay={}\nspeed={}\nbounce={}\nmusic={}\npills={}\nrank={}\ntheme={}\ncustom={}\nhide_fs={}\nmic_dot={}\nwelcomed={}\n",
+            "size={}\nround={}\ntop={}\nnotch={}\ndisplay={}\nspeed={}\nbounce={}\nmusic={}\npills={}\nrank={}\ntheme={}\ncustom={}\nhide_fs={}\nmic_dot={}\nwelcomed={}\ncover_tint={}\ntint={}\n",
             self.size,
             self.round,
             self.top,
+            b(self.notch),
             self.display,
             self.speed,
             self.bounce,
@@ -193,6 +203,8 @@ impl Config {
             b(self.hide_fs),
             b(self.mic_dot),
             b(self.welcomed),
+            b(self.cover_tint),
+            self.tint,
         );
         for (id, on) in &self.apps {
             s += &format!("app={id}|{}\n", b(*on));
@@ -250,6 +262,7 @@ mod tests {
         let mut c = Config::default();
         c.size = 2;
         c.round = 0.5;
+        c.notch = true;
         c.display = -1;
         c.pills[P_LINK] = false;
         c.rank = [5, 6, 0, 1, 2, 3, 4];
@@ -259,6 +272,8 @@ mod tests {
         c.hide_fs = false;
         c.mic_dot = false;
         c.welcomed = true;
+        c.cover_tint = true;
+        c.tint = 0.75;
         c.custom = [[0.5, 0.25], [0.1, 0.9], [0.0, 0.5]];
         assert!(Config::parse(&c.to_text()) == c);
         // Bad values fall back to defaults.

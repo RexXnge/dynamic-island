@@ -4,7 +4,7 @@
 use super::*;
 use windows::Devices::Radios::{Radio, RadioKind, RadioState};
 
-pub const CONTROL: (f32, f32, f32) = (340.0, 212.0, 36.0);
+pub const CONTROL: (f32, f32, f32) = (WIDE, 212.0, 36.0);
 pub const WM_RADIO: u32 = 0x8012; // wparam bits: 1 Wi-Fi present, 2 on, 4 Bluetooth present, 8 on
 const PAD: f32 = 14.0;
 const TILE_H: f32 = 124.0;
@@ -236,12 +236,8 @@ impl App {
             return false;
         }
         if notches > 0.0 {
-            // Back to the expanded player, like pushing Control Center away; nothing to show: collapse.
-            if self.media.is_some() {
-                self.set_view(View::Player);
-            } else {
-                self.expand.to = 0.0;
-            }
+            // Back to the expanded view hovering opens, like pushing Control Center away.
+            self.set_view(self.default_view());
         }
         true
     }

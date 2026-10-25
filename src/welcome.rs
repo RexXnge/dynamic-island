@@ -1,12 +1,15 @@
 // First-run welcome: the island opens by itself into a tour of everything it does. Page one
-// greets you with "hello" in a few languages; the others show how to use music, Control Center,
+// greets you with "hello" in a few languages, page two picks the island or notch style, page four turns the cover colour on or off;
+// the others show how to use music, Control Center,
 // the tools, the shelf, notices and settings, each with a small animated illustration. Pages slide and crossfade; the last one
 // links to the GitHub repo for a star. Skip or Get started
 // collapses it for good (`welcomed` in settings.ini).
 use super::*;
 
-pub const WELCOME: (f32, f32, f32) = (340.0, 214.0, 40.0);
-const PAGES: usize = 7;
+pub const WELCOME: (f32, f32, f32) = (WIDE, 214.0, 40.0);
+const PAGES: usize = 9;
+const STYLE_PAGE: usize = 1;
+const TINT_PAGE: usize = 3;
 const B_NEXT: usize = 30; // press-scale ids; above every top-row button id
 const B_SKIP: usize = 31;
 const B_STAR: usize = 32;
@@ -43,10 +46,16 @@ impl App {
         self.view == View::Welcome && (self.expand.to > 0.5 || !self.expand.settled()) || !self.wpage.settled()
     }
 
+    /// The two choice tiles on the style and cover colour pages: island / notch, off / on.
+    fn style_tiles(l: &Layout) -> [D2D_RECT_F; 2] {
+        let cx = l.x + l.w / 2.0;
+        [rect(cx - 82.0, l.y + 24.0, 76.0, 50.0), rect(cx + 6.0, l.y + 24.0, 76.0, 50.0)]
+    }
+
     /// Next, Skip, the "Star on GitHub" link that takes Skip's place on the last page, and the row's centre.
     fn footer(l: &Layout) -> (D2D_RECT_F, D2D_RECT_F, D2D_RECT_F, f32) {
         let cy = l.y + l.h - FOOT;
-        let next = rect(l.x + l.w - 22.0 - 104.0, cy - 15.0, 104.0, 30.0);
+        let next = rect(l.x + l.w - 20.0 - 88.0, cy - 15.0, 88.0, 30.0);
         let skip = rect(l.x + 14.0, cy - 15.0, 64.0, 30.0);
         let star = rect(l.x + 10.0, cy - 15.0, 112.0, 30.0);
         (next, skip, star, cy)
@@ -56,7 +65,15 @@ impl App {
         let (next, skip, star, _) = Self::footer(&self.layout());
         let inside = |r: &D2D_RECT_F| x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
         let page = self.wpage.to as usize;
-        if inside(&next) {
+        let tile = Self::style_tiles(&self.layout()).iter().position(inside);
+        if let (STYLE_PAGE | TINT_PAGE, Some(i)) = (page, tile) {
+            if page == STYLE_PAGE {
+                self.cfg.notch = i == 1;
+            } else {
+                self.cfg.cover_tint = i == 1;
+            }
+            self.cfg.save();
+        } else if inside(&next) {
             self.pressed = Some(B_NEXT);
             self.press = Spring { x: 1.0, v: 0.0, to: 0.0 };
             if page + 1 < PAGES {
@@ -106,21 +123,24 @@ impl App {
             let body_y = l.y + 112.0;
             let (title, body) = match page {
                 0 => ("Welcome to Dynamic Island", "A quiet home for music, timers and quick tools, right at the top of your screen."),
-                1 => ("Music, front and center", "Hover the pill to peek at what's playing. Click it for the full player to skip, pause or scrub."),
-                2 => ("Control Center", "Scroll down on the island for Wi-Fi, Bluetooth, mic, sound, brightness and dark mode. Scroll up to go back."),
-                3 => ("Your tools, one click away", "Clipboard history, the file shelf, a calculator and timers sit in the top row when it's open."),
-                4 => ("A shelf for files", "Drag files onto the island to park them, then drag them out wherever you need them."),
-                5 => ("Quick notices", "Copied text, screenshots, downloads, USB devices and earbuds pop up as small pills."),
+                STYLE_PAGE => ("Island or notch?", "Float below the top edge, or sit flush against it. You can always change this later in Settings."),
+                2 => ("Music, front and center", "Hover the pill to peek at what's playing. Click it for the full player to skip, pause or scrub."),
+                TINT_PAGE => ("Cover colour?", "Let the island take on a little of the album cover's colour while a song plays. Strength is in Settings."),
+                4 => ("Control Center", "Scroll down on the island for Wi-Fi, Bluetooth, mic, sound, brightness and dark mode. Scroll up to go back."),
+                5 => ("Your tools, one click away", "Clipboard history, the file shelf, a calculator and timers sit in the top row when it's open."),
+                6 => ("A shelf for files", "Drag files onto the island to park them, then drag them out wherever you need them."),
+                7 => ("Quick notices", "Copied text, screenshots, downloads, USB devices and earbuds pop up as small pills."),
                 _ => ("Make it yours", "Pick a theme, size and motion in Settings, the gear at the top right. Any pill can be turned off there."),
             };
             match page {
                 0 => self.hello(l.x + ox, l.y + 22.0 + rise(0.0), l.w, pa, t),
-                1 => self.wave_art(l.x + l.w / 2.0 + ox, l.y + 50.0 + rise(0.0), pa * fade(0.0)),
-                2 => self.control_art(l.x + l.w / 2.0 + ox, l.y + 50.0 + rise(0.0), pa * fade(0.0)),
-                4 => self.shelf_art(l.x + l.w / 2.0 + ox, l.y + 50.0 + rise(0.0), pa * fade(0.0), t),
-                3 | 5 => {
+                STYLE_PAGE | TINT_PAGE => self.style_art(l, ox, pa * fade(0.0), page == TINT_PAGE),
+                2 => self.wave_art(l.x + l.w / 2.0 + ox, l.y + 50.0 + rise(0.0), pa * fade(0.0)),
+                4 => self.control_art(l.x + l.w / 2.0 + ox, l.y + 50.0 + rise(0.0), pa * fade(0.0)),
+                6 => self.shelf_art(l.x + l.w / 2.0 + ox, l.y + 50.0 + rise(0.0), pa * fade(0.0), t),
+                5 | 7 => {
                     // Icons pop in one after another: the tools, or what shows up as a notice.
-                    let n = if page == 3 { 4 } else { 3 };
+                    let n = if page == 5 { 4 } else { 3 };
                     for i in 0..n {
                         let k = if entering { back_out((t - 0.08 * i as f32) / 0.5) } else { 1.0 };
                         if k > 0.0 {
@@ -128,7 +148,7 @@ impl App {
                             br.SetColor(&surface(ka));
                             dc.FillRoundedRectangle(&rrect(cx - 17.0 * k, cy - 17.0 * k, 34.0 * k, 34.0 * k, 11.0 * k), br);
                             match (page, i) {
-                                (3, _) => self.top_icon([B_CLIPS, B_SHELF, B_CALC, B_TIMER][i], cx, cy, 1.25 * k, ka),
+                                (5, _) => self.top_icon([B_CLIPS, B_SHELF, B_CALC, B_TIMER][i], cx, cy, 1.25 * k, ka),
                                 (_, 0) => self.top_icon(B_CLIPS, cx, cy, 1.25 * k, ka),
                                 (_, 1) => self.usb_icon(cx, cy, 0.85 * k, ka, true, 1.0),
                                 _ => self.headphones(cx, cy, 0.85 * k, ka),
@@ -161,8 +181,8 @@ impl App {
 
         // Footer: page dots (the current one stretches into a pill), Skip, Next / Get started.
         let (next, skip, star, cy) = Self::footer(l);
-        // Seven pages: smaller dots so the row fits between Skip and Next.
-        let mut dx = l.x + l.w / 2.0 - ((PAGES - 1) as f32 * 10.0 + 15.0) / 2.0;
+        // Nine pages: smaller dots, centred in the gap between Skip and Next.
+        let mut dx = (skip.right + next.left) / 2.0 - ((PAGES - 1) as f32 * 10.0 + 15.0) / 2.0;
         for i in 0..PAGES {
             let on = clamp01(1.0 - (i as f32 - p).abs());
             let dw = 5.0 + 10.0 * on;
@@ -224,6 +244,48 @@ impl App {
             let Ok(cl) = g.dw.CreateTextLayout(&one, &g.f_hello_l, cw + 30.0, 56.0) else { continue };
             br.SetColor(&fg(la));
             dc.DrawTextLayout(D2D_POINT_2F { x: r.left + 2.0, y: r.top }, &cl, br, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        }
+    }
+
+    /// Two mini screens, island and notch (or a plain and a cover-tinted island when `tint`);
+    /// the chosen one gets a ring. Shifted by `ox` while sliding.
+    unsafe fn style_art(&self, l: &Layout, ox: f32, a: f32, tint: bool) {
+        let (dc, br, g) = (&self.g.dc, &self.g.brush, &self.g);
+        for (i, t) in Self::style_tiles(l).iter().enumerate() {
+            let t = rect(t.left + ox, t.top, t.right - t.left, t.bottom - t.top);
+            let on = (if tint { self.cfg.cover_tint } else { self.cfg.notch }) == (i == 1);
+            br.SetColor(&surface(a));
+            dc.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: t, radiusX: 10.0, radiusY: 10.0 }, br);
+            if on {
+                br.SetColor(&fg(a));
+                dc.DrawRoundedRectangle(&D2D1_ROUNDED_RECT { rect: t, radiusX: 10.0, radiusY: 10.0 }, br, 2.0, None);
+            }
+            let cx = (t.left + t.right) / 2.0;
+            br.SetColor(&bg(a));
+            if tint {
+                // A playing pill: orange cover and waveform, the island warmed by it on the right.
+                const COVER: [f32; 3] = [1.0, 0.55, 0.2];
+                let k = if i == 1 { 0.5 } else { 0.0 };
+                let b = settings::island_rgb();
+                br.SetColor(&rgba(lerp(b[0], COVER[0], k), lerp(b[1], COVER[1], k), lerp(b[2], COVER[2], k), a));
+                dc.FillRoundedRectangle(&rrect(cx - 24.0, t.top + 6.0, 48.0, 14.0, 7.0), br);
+                br.SetColor(&rgba(COVER[0], COVER[1], COVER[2], a));
+                dc.FillRoundedRectangle(&rrect(cx - 19.0, t.top + 9.0, 8.0, 8.0, 2.0), br);
+                for (j, h) in [4.0, 7.0, 5.0].iter().enumerate() {
+                    dc.FillRoundedRectangle(&rrect(cx + 8.0 + j as f32 * 4.0, t.top + 13.0 - h / 2.0, 2.0, *h, 1.0), br);
+                }
+            } else if i == 1 {
+                // Same outline as the real notch, scaled down.
+                let m = Layout { x: cx - 20.0, y: t.top, w: 40.0, h: 12.0, r: 6.0, e: 0.0 };
+                if !self.fill_notch(&m) {
+                    dc.FillRectangle(&rect(m.x, m.y, m.w, m.h), br);
+                }
+            } else {
+                dc.FillRoundedRectangle(&rrect(cx - 18.0, t.top + 6.0, 36.0, 11.0, 5.5), br);
+            }
+            br.SetColor(&fg(a * if on { 1.0 } else { 0.6 }));
+            let label: Vec<u16> = (if tint { ["Off", "On"] } else { ["Island", "Notch"] })[i].encode_utf16().collect();
+            dc.DrawText(&label, &g.f_seg, &rect(t.left, t.bottom - 21.0, t.right - t.left, 16.0), br, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
         }
     }
 
