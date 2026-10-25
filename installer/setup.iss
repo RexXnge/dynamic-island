@@ -4,7 +4,7 @@
 ; Installs per user (no admin) to %LOCALAPPDATA%\Programs\Dynamic Island.
 
 #define AppName "Dynamic Island"
-#define AppVersion "1.1.0"
+#define AppVersion "1.2.0"
 #define AppExe "dynamic-island.exe"
 
 [Setup]
