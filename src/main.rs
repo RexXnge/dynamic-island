@@ -1252,13 +1252,11 @@ impl App {
         // How much the player shows; gives way to the timer: its countdown when compact, its views when expanded.
         let music_a = clamp01((self.music.x - 0.4) / 0.6) * clamp01(1.0 - self.clip.x * 2.0) * clamp01(1.0 - self.vol.x * 2.0) * lerp(1.0 - self.tc.x, self.va[0].x, clamp01(l.e));
         // While a song plays, the island takes on a little of its cover colour, like the waveform.
-        // Scaled by how colourful the cover is, so black-and-white art doesn't turn the island grey.
         let [ar, ag, ab] = self.accent;
-        let vivid = clamp01((ar.max(ag).max(ab) - ar.min(ag).min(ab)) * 2.0);
         // Stays on in other expanded views (Settings shows it live), but not behind the compact timer, copied or volume pills.
         let shown = clamp01((self.music.x - 0.4) / 0.6) * clamp01(1.0 - self.clip.x * 2.0) * clamp01(1.0 - self.vol.x * 2.0) * lerp(1.0 - self.tc.x, 1.0, clamp01(l.e));
         let on = self.cfg.cover_tint && self.media.is_some() && self.art.is_some();
-        let t = if on { 0.4 * self.cfg.tint * vivid * shown * clamp01(self.wave.x) * clamp01(self.art_in.x) } else { 0.0 };
+        let t = if on { 0.4 * self.cfg.tint * shown * clamp01(self.wave.x) * clamp01(self.art_in.x) } else { 0.0 };
         settings::set_tint([ar, ag, ab, t]);
         br.SetColor(&bg(1.0));
         if !(self.cfg.notch && self.fill_notch(&l)) {
