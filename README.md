@@ -2,7 +2,7 @@
 
 <p>
   <a href="https://github.com/RexXnge/dynamic-island/releases/latest"><img src="https://img.shields.io/github/v/release/RexXnge/dynamic-island?label=version" alt="Latest version"></a>
-  <a href="https://github.com/RexXnge/dynamic-island/releases"><img src="https://img.shields.io/github/downloads/RexXnge/dynamic-island/total" alt="Total downloads"></a>
+  <a href="https://github.com/RexXnge/dynamic-island/releases"><img src="https://img.shields.io/github/downloads/RexXnge/dynamic-island/total?cacheSeconds=3600" alt="Total downloads"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4" alt="Windows 10 / 11">
 </p>
