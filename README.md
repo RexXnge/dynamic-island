@@ -52,7 +52,7 @@ Float below the top edge, or sit flush against it with square top corners. Switc
 - Calculator and unit converter
 - Themes with custom colours, size, corners, motion and per-pill settings
 - Hides while a game or video is fullscreen; optional start with Windows
-- Updates from GitHub releases: an "Update available" pill, installed when you click it (turn off the Updates switch in Settings > Pills to stop checking)
+- Updates from GitHub releases, installed on their own under an "Installing update" pill (turn off the Updates switch in Settings > Pills to stop checking)
 
 The exe isn't code-signed, so Windows SmartScreen may warn on first run: click "More info", then "Run anyway".
 

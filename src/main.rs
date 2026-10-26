@@ -1634,7 +1634,7 @@ impl App {
                 Note::Buds(_) => (&self.clip_text, "Connected"),
                 Note::Usb(on) => (&self.clip_text, if on { "Plugged in" } else { "Unplugged" }),
                 Note::Pick => ("Pick a colour", &self.clip_text),
-                Note::Update => (if self.updating { "Updating" } else { "Update available" }, &self.clip_text),
+                Note::Update => (if self.updating { "Installing update" } else { "Update available" }, &self.clip_text),
             };
             let has_preview = !sub.is_empty();
             br.SetColor(&fg(ca));

@@ -1,5 +1,5 @@
 // Auto-update from GitHub releases: checks the latest release 30 s after launch and every 6 h.
-// A newer tag shows an "Update available" pill; clicking it downloads the release's installer,
+// A newer tag is installed on its own under an "Installing update" pill: it downloads the release's installer,
 // checks its SHA-256 against the digest GitHub publishes for the asset, and runs it silently
 // (the installer stops the island and starts the new one). Nothing runs unless the hash matches.
 // The Updates switch (Pills page) turns all of this off, including the check itself.
@@ -136,9 +136,11 @@ impl App {
         }
     }
 
-    /// The pill waits until the island isn't showing anything else.
+    /// Installs once the island isn't showing anything else, with an "Installing update" pill.
     fn show_update(&mut self) {
-        let Some(u) = &self.update else { return };
+        if self.update.is_none() {
+            return;
+        }
         if self.clip.to > 0.5 || self.vol.to > 0.5 || self.expand.to > 0.5 || self.updating {
             unsafe { SetTimer(self.hwnd, T_UPDATE, RETRY_MS, None) };
             return;
@@ -147,19 +149,15 @@ impl App {
         self.shot = None;
         self.swatch = None;
         self.link = None;
-        self.clip_text = format!("{} · click to install", u.tag);
         self.clip.to = 1.0;
-        unsafe {
-            SetTimer(self.hwnd, T_CLIP, 8000, None);
-            SetTimer(self.hwnd, T_UPDATE, EVERY_MS, None); // ignored: remind again later
-        }
+        self.run_update();
     }
 
-    /// Update pill clicked: download, verify and install in the background.
+    /// Downloads, verifies and installs in the background; the pill stays up until the installer replaces us.
     pub fn run_update(&mut self) {
         let Some(u) = self.update.take() else { return };
         self.updating = true;
-        self.clip_text = format!("Downloading {}…", u.tag);
+        self.clip_text = u.tag.clone();
         unsafe {
             let _ = KillTimer(self.hwnd, T_CLIP); // stays up until the installer replaces us
         }
