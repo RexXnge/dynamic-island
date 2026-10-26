@@ -581,11 +581,16 @@ fn main() -> Result<()> {
                 if !GetMessageW(&mut msg, None, 0, 0).as_bool() {
                     return Ok(());
                 }
+                // The follow-the-mouse poll changes nothing on screen unless it moved the island.
+                let poll = msg.message == WM_TIMER && msg.wParam.0 == T_MON;
+                let mon = APP.with(|a| a.borrow().as_ref().map(|app| app.mon));
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
                 APP.with(|a| a.borrow_mut().as_mut().map(|app| {
                     app.last = Instant::now(); // don't jump animations after idling
-                    app.frame();
+                    if !(app.hidden && app.shown.settled()) && !(poll && Some(app.mon) == mon) {
+                        app.frame(); // nothing to draw behind a fullscreen app
+                    }
                 }));
             }
         }

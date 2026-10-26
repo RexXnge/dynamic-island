@@ -2,13 +2,14 @@
 // and start with Windows through the per-user Run key.
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
+use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 
 pub const WM_FULLSCREEN: u32 = 0x800E; // wparam = a fullscreen app now covers the island's display
 const RUN: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const NAME: PCWSTR = w!("DynamicIsland");
 
 static ISLAND: AtomicIsize = AtomicIsize::new(0);
+static MOVES: AtomicIsize = AtomicIsize::new(0); // the foreground app's location-change hook
 static LAST: AtomicBool = AtomicBool::new(false);
 
 /// Is the foreground window a captionless window covering the whole display the island is on?
@@ -44,6 +45,9 @@ pub fn fullscreen_now(island: HWND) -> bool {
 /// Foreground changes and the foreground window resizing (a video going fullscreen) re-check;
 /// the island only hears about it when the answer changes.
 unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, object: i32, _: i32, _: u32, _: u32) {
+    if event == EVENT_SYSTEM_FOREGROUND {
+        hook_moves();
+    }
     if event == EVENT_OBJECT_LOCATIONCHANGE && (object != OBJID_WINDOW.0 || hwnd != GetForegroundWindow()) {
         return; // the cursor and every other window move constantly
     }
@@ -58,9 +62,25 @@ unsafe extern "system" fn on_event(_: HWINEVENTHOOK, event: u32, hwnd: HWND, obj
 pub unsafe fn watch_fullscreen(island: HWND) {
     ISLAND.store(island.0 as isize, Ordering::Relaxed);
     LAST.store(fullscreen_now(island), Ordering::Relaxed); // started behind a fullscreen app: its exit must count as a change
-    let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
-    for e in [EVENT_SYSTEM_FOREGROUND, EVENT_OBJECT_LOCATIONCHANGE] {
-        SetWinEventHook(e, e, None, Some(on_event), 0, 0, flags);
+    let fg = EVENT_SYSTEM_FOREGROUND;
+    SetWinEventHook(fg, fg, None, Some(on_event), 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    hook_moves();
+}
+
+/// Window moves are watched in the foreground app only: system-wide, every cursor move and caret
+/// blink in any app would wake this thread. Re-hooked on each foreground change.
+unsafe fn hook_moves() {
+    let old = MOVES.swap(0, Ordering::Relaxed);
+    if old != 0 {
+        let _ = UnhookWinEvent(HWINEVENTHOOK(old as _));
+    }
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut pid as *mut u32));
+    if pid != 0 {
+        // pid 0 would mean every process
+        let e = EVENT_OBJECT_LOCATIONCHANGE;
+        let h = SetWinEventHook(e, e, None, Some(on_event), pid, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        MOVES.store(h.0 as isize, Ordering::Relaxed);
     }
 }
 
