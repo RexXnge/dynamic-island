@@ -1,5 +1,7 @@
 # Dynamic Island for Windows
 
+<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.jpg" alt="Launch video: the island opens into the player, converts 5 km to miles, starts a timer, shows notices, takes on the album cover's colour, and idles at 0% CPU" width="760"></a></p>
+
 <p>
   <a href="https://github.com/RexXnge/dynamic-island/releases/latest"><img src="https://img.shields.io/github/v/release/RexXnge/dynamic-island?label=version" alt="Latest version"></a>
   <a href="https://github.com/RexXnge/dynamic-island/releases"><img src="https://img.shields.io/github/downloads/RexXnge/dynamic-island/total?cacheSeconds=3600" alt="Total downloads"></a>
@@ -13,36 +15,11 @@ An Apple-style Dynamic Island for Windows, written in Rust with Direct2D and Dir
 
 <p align="center">Windows 10 or 11 (64-bit). Installs for your account only: no admin rights, no .NET or other runtimes.</p>
 
-<p align="center"><img src="docs/demo.gif" alt="The island going from the compact music pill to the player, Control Center, clipboard, mixer, calculator, settings and a timer" width="520"></p>
-
 ## Island or notch
 
 Float below the top edge, or sit flush against it with square top corners. Switch any time in Settings > Look.
 
-| Island | Notch |
-| :---: | :---: |
-| <img src="docs/island-states.png" alt="Island style: resting clock pill, compact music pill and the expanded player" width="380"> | <img src="docs/notch-states.png" alt="Notch style: resting clock pill, compact music pill and the expanded player" width="380"> |
-
-<details>
-<summary>Notch style in motion</summary>
-<p align="center"><img src="docs/demo-notch.gif" alt="The same tour in notch style" width="520"></p>
-</details>
-
 ## What it does
-
-| Control Center | Timer | Clipboard history |
-| :---: | :---: | :---: |
-| <img src="docs/island-control.png" alt="Control Center with Wi-Fi, Bluetooth, mic, sound, brightness, volume and dark mode" width="280"> | <img src="docs/island-timer.png" alt="Timer picker with hours, minutes and seconds" width="280"> | <img src="docs/island-clipboard.png" alt="Clipboard history with copied text and links" width="280"> |
-| **Sound Mixer** | **Calculator and converter** | **AI with an Allow card** |
-| <img src="docs/island-mixer.png" alt="Per-app volume sliders" width="280"> | <img src="docs/island-calculator.png" alt="5 km to mi converted to 3.1 mi" width="280"> | <img src="docs/island-ai-allow.png" alt="The assistant asking to start a 5 minute timer, with Cancel and Start" width="280"> |
-| **Calendar** | **File shelf** | **Settings** |
-| <img src="docs/island-calendar.png" alt="Month calendar behind the clock" width="280"> | <img src="docs/island-shelf.png" alt="Shelf drop zone" width="280"> | <img src="docs/island-settings.png" alt="Settings with size, corners, top gap, style and display" width="280"> |
-
-| Notices | Themes and cover colour |
-| :---: | :---: |
-| <img src="docs/notices.png" alt="Copied link, copied text, copied screenshot, volume, download and a running timer as small pills" width="240"> | <img src="docs/themes.png" alt="Dark, Light, Midnight, Rose and Forest themes, and the island tinted by the album cover" width="480"> |
-
-<p align="center"><img src="docs/stats.png" alt="1.5% CPU while music plays, 84 MB memory, 0.8 MB app, 2.4 MB installer" width="760"></p>
 
 - Now playing with album art, waveform, seek bar and synced lyrics (LRCLIB, opt-in: sends the track name to lrclib.net)
 - Control Center: scroll down on the island for Wi-Fi, Bluetooth, mic, sound, brightness, volume and dark mode
