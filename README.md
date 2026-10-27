@@ -1,6 +1,6 @@
 # Dynamic Island for Windows
 
-<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.jpg" alt="Launch video: the island opens into the player, converts 5 km to miles, starts a timer, shows notices, takes on the album cover's colour, and idles at 0% CPU" width="760"></a></p>
+https://github.com/user-attachments/assets/6d6f2047-d03f-4b97-ae56-d51fa4ef20d9
 
 <p>
   <a href="https://github.com/RexXnge/dynamic-island/releases/latest"><img src="https://img.shields.io/github/v/release/RexXnge/dynamic-island?label=version" alt="Latest version"></a>
